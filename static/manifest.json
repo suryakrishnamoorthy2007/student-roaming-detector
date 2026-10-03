@@ -1,0 +1,21 @@
+{
+  "name": "CampusTrack AI Enterprise",
+  "short_name": "CampusTrack",
+  "description": "Mobile face recognition and roaming class timetable monitor",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#082b35",
+  "theme_color": "#08a6c7",
+  "icons": [
+    {
+      "src": "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=192&h=192&fit=crop",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=512&h=512&fit=crop",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
