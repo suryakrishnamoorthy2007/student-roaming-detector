@@ -87,7 +87,7 @@ async function toggleTorch() {
     await track.applyConstraints({ advanced: [{ torch: isTorchOn }] });
     const btn = document.getElementById('btn-torch');
     if (btn) {
-      btn.className = isTorchOn 
+      btn.className = isTorchOn
         ? "w-8 h-8 sm:w-9 sm:h-9 bg-amber-500 text-white rounded-xl flex items-center justify-center transition active:scale-95 shadow-md shadow-amber-500/50"
         : "w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200";
     }
@@ -102,7 +102,7 @@ function toggleScanner() {
   const video = document.getElementById('webcam');
   if (isDetectionPaused) {
     isDetectionPaused = false;
-    video?.play().catch(() => {});
+    video?.play().catch(() => { });
     if (button) {
       button.className = 'bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-rose-600/20 active:scale-95';
       button.innerHTML = '<i class="fa-solid fa-stop text-[11px]"></i><span>Stop</span>';
@@ -128,7 +128,7 @@ function pauseScannerInternal() {
 function resumeScanner(resetSelection = false) {
   isDetectionPaused = false;
   const video = document.getElementById('webcam');
-  if (video) video.play().catch(() => {});
+  if (video) video.play().catch(() => { });
   const badge = document.getElementById('confidence-badge');
   if (badge) badge.classList.add('hidden');
   const scannerButton = document.getElementById('btn-scanner-toggle');
@@ -328,7 +328,7 @@ async function handleSnapAndVerify() {
       try {
         const errJson = await response.json();
         if (errJson.detail) errDetail = errJson.detail;
-      } catch (e) {}
+      } catch (e) { }
       throw new Error(errDetail);
     }
 
