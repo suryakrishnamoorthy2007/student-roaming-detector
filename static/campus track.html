@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#082b35">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CampusTrack">
+  <meta name="description" content="CampusTrack AI Enterprise - Mobile face recognition and class monitoring app">
+  <title>CampusTrack AI Enterprise - Face Recognition & Timetable Monitor</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- FontAwesome 6.5.1 CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Typefaces -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Processing Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <!-- Face-API.js Bundle -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.min.js"></script>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <!-- Modular, Cached Stylesheet -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans select-none overflow-x-hidden">
+  <div id="app-splash" aria-hidden="true">
+    <div class="splash-content">
+      <div class="splash-logo-mark"><i class="fa-solid fa-building-columns"></i></div>
+      <div class="splash-wordmark">Campus<span>Track</span></div>
+      <p class="splash-tagline">Intelligent campus monitoring</p>
+      <p class="splash-credit">Developed by<span>Surya &amp; Sakthivel</span></p>
+    </div>
+  </div>
+  <script>
+    window.setTimeout(() => {
+      document.getElementById('app-splash')?.classList.add('is-leaving');
+    }, 1800);
+  </script>
+  <div class="mobile-app-shell">
+
+  <!-- TOP HEADER -->
+  <header class="bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40 px-3 py-2.5 sm:px-5 flex items-center justify-between shadow-sm">
+    <div class="flex items-center gap-2.5">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-teal-500 flex items-center justify-center font-bold text-white shadow-md shadow-cyan-500/20">
+        <i class="fa-solid fa-building-columns text-base"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-1.5">
+          <h1 class="font-black text-base sm:text-lg tracking-tight text-slate-900 leading-none">Campus<span class="text-cyan-600">Track</span></h1>
+          <span class="bg-cyan-50 border border-cyan-200 text-cyan-700 font-mono text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Enterprise</span>
+        </div>
+        <p class="text-[11px] text-slate-500 font-mono hidden sm:block">Roaming Student Detector &amp; Class Schedule Monitor</p>
+      </div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="header-actions">
+      <div class="status-pill flex items-center gap-1.5 text-xs bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200">
+        <span id="sys-pulse" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="sys-label" class="font-mono text-slate-600 text-[10px] sm:text-xs">Initializing AI...</span>
+      </div>
+
+      <button type="button" onclick="refreshScannerData()" title="Refresh scanner data" aria-label="Refresh scanner data" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200">
+        <i class="fa-solid fa-arrows-rotate text-xs sm:text-sm"></i>
+      </button>
+
+      <button id="btn-torch" onclick="toggleTorch()" title="Toggle Flashlight" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
+        <i class="fa-solid fa-bolt text-xs sm:text-sm"></i>
+      </button>
+
+      <button id="btn-flip" onclick="toggleCameraFacing()" title="Flip Camera" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
+        <i class="fa-solid fa-camera-rotate text-xs sm:text-sm"></i>
+      </button>
+
+      <button onclick="openTimetableViewer()" title="View Timetables" class="mobile-header-duplicate w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
+        <i class="fa-solid fa-calendar-days text-xs sm:text-sm"></i>
+      </button>
+
+      <button onclick="openSettingsModal()" title="Settings" class="mobile-header-duplicate w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
+        <i class="fa-solid fa-gear text-xs sm:text-sm"></i>
+      </button>
+
+      <button id="btn-install-app" class="app-install-button hidden" type="button" title="Install app">
+        <i class="fa-solid fa-download text-[11px]"></i>
+      </button>
+
+      <button id="btn-header-snap" type="button" onclick="document.getElementById('snap-btn')?.click()" title="Snap &amp; Verify Face" class="bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-cyan-600/20 active:scale-95">
+        <i class="fa-solid fa-camera text-[11px]"></i>
+        <span>Snap</span>
+      </button>
+
+    </div>
+  </header>
+
+  <!-- USER ACCESS GATE -->
+  <div id="user-login-modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+    <button id="login-help-button" type="button" onclick="toggleLoginHelp()" aria-controls="login-help-panel" aria-expanded="false" class="fixed top-4 right-4 z-[70] px-3 py-2 rounded-lg border border-white/30 bg-slate-900/60 hover:bg-slate-900/80 text-white text-xs font-semibold transition backdrop-blur" title="Sign-in help">
+      <i class="fa-regular fa-circle-question mr-1.5" aria-hidden="true"></i>Help
+    </button>
+    <aside id="login-help-panel" role="dialog" aria-labelledby="login-help-title" class="hidden fixed top-16 right-4 z-[70] w-[min(20rem,calc(100vw-2rem))] bg-white border border-slate-200 rounded-xl p-4 shadow-2xl text-sm text-slate-700">
+      <div class="flex items-center justify-between gap-3">
+        <h2 id="login-help-title" class="font-bold text-slate-900"><i class="fa-solid fa-shield-halved text-cyan-700 mr-1.5" aria-hidden="true"></i>Scanner access</h2>
+        <button type="button" onclick="toggleLoginHelp(false)" aria-label="Close help" class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <p class="mt-3">Only authorized users may access the scanner. Sign in with your approved user ID and password.</p>
+      <p class="mt-2">Need access? Contact your campus administrator to request an account and approval. If your account is awaiting approval, ask the administrator to approve it.</p>
+      <p class="mt-2 text-xs text-slate-500">Use <strong>Admin sign in</strong> only if you are an administrator.</p>
+    </aside>
+    <div class="engineering-login-backdrop" aria-hidden="true">
+      <div class="login-radar-target"></div>
+      <div class="login-focus-frame"></div>
+      <div class="login-scan-sweep"></div>
+      <div class="engineering-login-copy">
+        <p class="text-[10px] font-mono text-cyan-200/80">CAMPUS TRACK</p>
+        <p class="mt-2 text-xl sm:text-xl font-bold tracking-[0.018em] text-white">Skipping class and feeling sly?
+The HOD's new favorite AI!</p>
+        <p class="mt-2 text-[11px] font-mono tracking-[0.08em] normal-case text-cyan-100/70">Secure access // intelligent campus monitoring</p>
+      </div>
+    </div>
+    <div id="user-login-panel" class="engineering-panel login-panel-arrive relative z-10 bg-white/95 border border-slate-200 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+      <div class="text-center">
+        <div class="mx-auto w-12 h-12 rounded-2xl bg-cyan-50 text-cyan-600 flex items-center justify-center text-xl border border-cyan-200"><i class="fa-solid fa-user-lock"></i></div>
+        <h2 class="font-bold text-lg text-slate-900 mt-3">CampusTrack User Login</h2>
+        <p class="text-xs text-slate-500 mt-1">Use an approved user ID to access the scanner.</p>
+      </div>
+      <form onsubmit="handleUserLogin(event)" class="space-y-3 text-xs">
+        <input id="user-login-id" type="text" placeholder="User ID" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
+        <input id="user-login-pass" type="password" placeholder="Password" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
+        <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-2.5 rounded-xl transition">Sign In</button>
+      </form>
+      <button type="button" onclick="openAdminAuthModal()" class="mx-auto block px-2 py-1 text-[10px] font-semibold text-slate-500 hover:text-emerald-700 transition">Admin sign in</button>
+      <p id="user-login-status" class="text-center text-[11px] text-rose-600 min-h-4"></p>
+    </div>
+  </div>
+
+  <!-- MAIN SCANNER VIEWPORT -->
+  <main class="scanner-main engineering-panel flex-1 relative flex flex-col items-center justify-start p-3 sm:p-4 max-w-6xl mx-auto w-full gap-3">
+    
+    <!-- Location & Clock Bar -->
+    <div class="w-full flex items-center justify-between text-xs bg-white border border-slate-200 px-3.5 py-2 rounded-2xl shadow-sm">
+      <div class="flex items-center gap-1.5">
+        <i class="fa-solid fa-location-dot text-rose-500 text-xs"></i>
+        <span class="text-slate-500 font-medium">Zone:</span>
+        <select id="sel-location" class="bg-slate-50 border border-slate-200 rounded-lg px-2 py-0.5 text-slate-700 text-xs focus:outline-none focus:border-indigo-500">
+          <option value="Campus Canteen">Campus Canteen</option>
+          <option value="Sports Grounds">Sports Grounds</option>
+          <option value="Academic Block Corridor">Academic Corridor</option>
+          <option value="Hostel Gate">Hostel Gate</option>
+          <option value="Parking Area">Parking Area</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-1.5 font-mono text-[11px] text-indigo-600 font-bold">
+        <i class="fa-regular fa-clock"></i>
+        <span id="live-hud-clock">--:--:--</span>
+      </div>
+    </div>
+
+    <!-- Camera Feed Viewport Card -->
+    <div class="scanner-camera relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-3xl overflow-hidden shadow-xl border-2 border-slate-300 flex items-center justify-center">
+      <video id="webcam" autoplay muted playsinline class="absolute inset-0 w-full h-full object-cover z-0"></video>
+      <canvas id="overlay" class="absolute inset-0 w-full h-full pointer-events-none z-10"></canvas>
+
+      <!-- Reticle / Viewfinder Frame -->
+      <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+        <div class="relative w-56 h-72 sm:w-64 sm:h-80 max-w-[85%] max-h-[85%] rounded-3xl border border-dashed border-cyan-400/70 flex items-center justify-center">
+          <div class="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 rounded-tl-xl border-cyan-400"></div>
+          <div class="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 rounded-tr-xl border-cyan-400"></div>
+          <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 rounded-bl-xl border-cyan-400"></div>
+          <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 rounded-br-xl border-cyan-400"></div>
+          <div class="text-[10px] font-mono tracking-widest text-cyan-200 bg-slate-900/80 px-2.5 py-1 rounded-full border border-cyan-400/40 backdrop-blur">
+            MANUAL SNAP
+          </div>
+        </div>
+      </div>
+
+      <!-- Match Confidence Pill -->
+      <div id="confidence-badge" class="hidden absolute top-3.5 left-3.5 z-20 bg-emerald-600 text-white font-mono text-xs font-bold px-3 py-1 rounded-full shadow-lg border border-emerald-400/40 backdrop-blur">
+        MATCH: <span id="conf-val">0%</span>
+      </div>
+
+      <!-- Camera Off Notice -->
+      <div id="cam-fallback" class="hidden absolute inset-0 z-30 bg-slate-900/95 flex flex-col items-center justify-center p-6 text-center space-y-3">
+        <div class="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl border border-amber-500/30">
+          <i class="fa-solid fa-video-slash"></i>
+        </div>
+        <h3 class="text-sm font-bold text-white">Camera Access Blocked / Inactive</h3>
+        <p class="text-xs text-slate-300 max-w-xs leading-relaxed">
+          Please allow camera permission in browser settings to enable face capture.
+        </p>
+        <button onclick="requestCameraStart()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-xl font-medium transition">
+          Retry Camera Stream
+        </button>
+      </div>
+    </div>
+
+    <!-- Manual Snap & Verify Controls Bar -->
+    <div class="w-full flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-3 shadow-sm">
+      <button id="snap-btn" type="button" class="flex-1 bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 active:scale-[0.98] text-white font-bold py-3.5 px-6 rounded-xl shadow-md shadow-cyan-600/20 transition-all flex items-center justify-center gap-2.5 text-sm sm:text-base cursor-pointer">
+        <i class="fa-solid fa-camera text-base"></i>
+        <span id="snap-btn-text">Snap &amp; Verify Face</span>
+      </button>
+
+      <div class="flex items-center justify-between sm:justify-end gap-3 px-1 sm:px-0">
+        <label class="flex items-center gap-2 text-xs text-slate-600">
+          <i class="fa-solid fa-magnifying-glass-plus text-slate-400"></i>
+          <span class="hidden sm:inline">Zoom</span>
+          <input id="camera-zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="Camera zoom" class="w-20 sm:w-24 accent-cyan-700" disabled>
+          <span id="camera-zoom-value" class="font-mono text-[11px] text-slate-500 w-7">1.0x</span>
+        </label>
+
+        <button type="button" onclick="toggleCameraFacing()" title="Flip Camera" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-slate-200 active:scale-95">
+          <i class="fa-solid fa-camera-rotate"></i>
+          <span class="hidden sm:inline">Flip</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Verification Result Display Area -->
+    <div id="verify-result" class="w-full bg-white border border-slate-200 rounded-2xl p-4 shadow-sm transition-all duration-300 min-h-[64px] flex items-center" role="region" aria-live="polite">
+      <div class="flex items-center gap-2.5 text-slate-500 text-xs">
+        <i class="fa-solid fa-circle-info text-cyan-600 text-sm"></i>
+        <span>Ready for snapshot verification. Point camera at student and click <strong>Snap &amp; Verify Face</strong>.</span>
+      </div>
+    </div>
+    <!-- Multi-Student Roaming Group Queue Tray -->
+    <div id="group-tray" class="w-full bg-white border border-rose-200 rounded-2xl p-3 shadow-xl hidden flex-col gap-2.5 transition-all duration-300">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
+          <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+          <span><i class="fa-solid fa-users text-indigo-600 mr-1"></i> Roaming Group Queue (<span id="group-count" class="text-rose-600">0</span>)</span>
+        </div>
+        <button onclick="clearIncidentGroup()" class="text-[11px] text-slate-500 hover:text-rose-600 transition">Clear Queue</button>
+      </div>
+      <div id="group-thumbnails" class="flex gap-2.5 overflow-x-auto py-1"></div>
+      <button onclick="dispatchGroupAlert()" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30 active:scale-95">
+        <i class="fa-solid fa-paper-plane"></i>
+        <span>Dispatch Group Incident Alert to HOD(s)</span>
+      </button>
+    </div>
+
+  </main>
+
+  <!-- DYNAMIC VERIFICATION POPUP MODAL -->
+  <div id="verify-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div id="modal-card-container" class="bg-white border-2 rounded-3xl max-w-md w-full p-4 sm:p-5 space-y-3.5 shadow-2xl my-auto transition-all duration-300">
+      <div class="flex justify-between items-start border-b border-slate-100 pb-3">
+        <div>
+          <span id="modal-status-badge" class="text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full">STATUS</span>
+          <h2 id="modal-stu-name" class="font-bold text-lg text-slate-900 mt-1 leading-tight">Student Name</h2>
+          <p id="modal-stu-reg" class="text-indigo-600 font-mono text-xs font-semibold">110324104105</p>
+        </div>
+        <button onclick="dismissVerificationModal()" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200 text-center">
+        <div>
+          <p class="text-[10px] text-slate-500 mb-1.5 font-medium flex items-center justify-center gap-1">
+            <i class="fa-solid fa-id-badge text-indigo-600"></i> Master Photo
+          </p>
+          <img id="modal-enrolled-photo" src="" class="w-full aspect-square object-cover rounded-xl border border-slate-200 bg-white shadow-sm">
+        </div>
+        <div>
+          <p class="text-[10px] text-indigo-600 mb-1.5 font-bold flex items-center justify-center gap-1">
+            <i class="fa-solid fa-camera text-indigo-600"></i> Live Snapshot
+          </p>
+          <img id="modal-live-photo" src="" class="w-full aspect-square object-cover rounded-xl border-2 border-indigo-500 bg-white shadow-sm">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+        <div>
+          <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">Department &amp; Class</span>
+          <span id="modal-stu-class" class="font-semibold text-slate-800 truncate block">CSE • Yr 3-B</span>
+        </div>
+        <div>
+          <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">Class Advisor</span>
+          <span id="modal-stu-advisor" class="font-semibold text-slate-800 truncate block">Ms. Shanmugavalli H</span>
+        </div>
+        <div class="col-span-2">
+          <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">HOD Name</span>
+          <span id="modal-stu-hod" class="font-semibold text-slate-800 truncate block">Dr. Kamal N</span>
+        </div>
+      </div>
+
+      <div id="modal-timetable-banner" class="p-3.5 rounded-2xl border transition-all duration-300 flex items-start gap-3">
+        <div id="modal-timetable-icon" class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-base">
+          <i class="fa-solid fa-clock"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-center text-[10px] font-mono font-bold mb-0.5">
+            <span id="modal-period-num">PERIOD SLOT</span>
+            <span id="modal-period-time">--:-- - --:--</span>
+          </div>
+          <p id="modal-subject-name" class="font-bold text-slate-900 text-sm truncate"></p>
+          <p id="modal-faculty-name" class="text-xs text-slate-600 truncate mt-0.5"></p>
+          <p id="modal-notice" class="text-[10px] font-mono mt-1 font-medium"></p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 pt-1">
+        <button onclick="addToIncidentGroup()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-xl text-xs transition border border-slate-300 flex items-center justify-center gap-1.5 active:scale-95">
+          <i class="fa-solid fa-user-plus text-indigo-600"></i>
+          <span>Add to Group (+)</span>
+        </button>
+        <button id="btn-modal-alert" onclick="dispatchSingleAlert()" class="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-lg flex items-center justify-center gap-1.5 active:scale-95">
+          <i class="fa-solid fa-paper-plane"></i>
+          <span>Save &amp; Alert HOD</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMAIL & DIRECT WHATSAPP PREVIEW MODAL -->
+  <div id="email-preview-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div class="bg-white border border-slate-200 rounded-3xl max-w-lg w-full p-5 space-y-4 shadow-2xl my-auto text-xs">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2 text-rose-600 font-bold text-sm">
+          <i class="fa-solid fa-envelope-circle-check text-lg"></i>
+          <span>HOD Incident Notice Generated</span>
+        </div>
+        <button onclick="closeEmailPreviewModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-base"></i></button>
+      </div>
+
+      <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1 font-mono text-[11px] text-slate-700">
+        <p><span class="text-slate-500">Recipient HOD:</span> <span id="mail-recipients" class="text-indigo-600 font-bold">hod@college.edu</span></p>
+        <p><span class="text-slate-500">Subject:</span> <span id="mail-subject" class="text-rose-600 font-semibold">URGENT: Roaming Alert</span></p>
+      </div>
+
+      <div id="mail-body-preview" class="bg-slate-50 border border-slate-200 text-slate-900 rounded-2xl p-4 shadow-inner max-h-72 overflow-y-auto font-sans leading-relaxed text-[12px]"></div>
+
+      <button id="link-direct-whatsapp" type="button" onclick="sendWhatsAppAlert()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30">
+        <i class="fa-brands fa-whatsapp text-lg"></i>
+        <span>Share WhatsApp Alert and Evidence Photos</span>
+      </button>
+
+      <button id="link-direct-email" type="button" onclick="sendEmailAlert()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30">
+        <i class="fa-solid fa-paperclip text-lg"></i>
+        <span>Share Email with Evidence Photos</span>
+      </button>
+
+      <button onclick="closeEmailPreviewModal()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-xl transition font-medium">
+        Acknowledge &amp; Resume Scanner
+      </button>
+    </div>
+  </div>
+
+  <!-- ADMIN SIGN-IN -->
+  <div id="admin-auth-modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[70] hidden flex items-center justify-center p-4">
+    <form onsubmit="handleAdminAuth(event)" class="bg-white border border-slate-200 rounded-2xl p-5 w-full max-w-xs space-y-3 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold text-slate-900"><i class="fa-solid fa-shield-halved text-emerald-700 mr-2"></i>Admin sign in</h2>
+        <button type="button" onclick="closeAdminAuthModal()" class="w-7 h-7 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200" title="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <input id="auth-user" type="text" placeholder="Admin username" autocomplete="username" required class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800">
+      <input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" required class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800">
+      <p id="admin-auth-status" class="min-h-4 text-[11px] text-rose-600" aria-live="polite"></p>
+      <button type="submit" class="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-2 rounded-lg transition">Sign in</button>
+    </form>
+  </div>
+
+  <!-- MULTI-TAB ADMIN DASHBOARD -->
+  <div id="admin-dashboard-modal" class="fixed inset-0 bg-slate-100 z-50 hidden flex flex-col overflow-hidden">
+    <div class="engineering-panel bg-white border-0 rounded-none w-full h-full min-h-0 p-3 sm:p-5 lg:p-6 space-y-4 sm:space-y-5 shadow-none flex flex-col overflow-y-auto">
+      
+      <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center text-sm font-bold">
+            <i class="fa-solid fa-sliders"></i>
+          </div>
+          <div>
+            <h2 class="font-bold text-base sm:text-lg text-slate-900 leading-none">Administration Central</h2>
+            <p class="text-[11px] text-slate-500 font-mono mt-0.5">Multi-Class Timetables, Master Roster &amp; Disciplinary Audits</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" onclick="refreshAdminView()" title="Refresh current page" aria-label="Refresh current page" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+            <i class="fa-solid fa-arrows-rotate text-xs"></i>
+          </button>
+          <button onclick="closeAdminDashboard()" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Admin Tabs -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs font-semibold shrink-0">
+        <button onclick="switchAdminTab('tab-single')" id="btn-tab-single" class="tab-btn py-2 rounded-xl bg-indigo-600 text-white shadow transition">1. Single Enroll</button>
+        <button onclick="switchAdminTab('tab-bulk')" id="btn-tab-bulk" class="tab-btn py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">2. Bulk Excel &amp; ZIP</button>
+        <button onclick="switchAdminTab('tab-tt')" id="btn-tab-tt" class="tab-btn py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">3. Class Timetables</button>
+        <button onclick="switchAdminTab('tab-audit')" id="btn-tab-audit" class="tab-btn py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">4. Audit Logs (<span id="admin-audit-count">0</span>)</button>
+        <button onclick="switchAdminTab('tab-users')" id="btn-tab-users" class="tab-btn py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">5. Users</button>
+        <button onclick="switchAdminTab('tab-history')" id="btn-tab-history" class="tab-btn py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">6. Scan History</button>
+      </div>
+
+      <!-- TAB 1: Single Student Enrollment -->
+      <div id="tab-single" class="tab-content space-y-3.5 text-xs">
+        <form id="form-single" onsubmit="handleSingleStudentEnroll(event)" class="space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Register Number *</label>
+              <input type="text" id="s-reg" placeholder="e.g. 110324104105" required class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 font-mono focus:border-indigo-500">
+            </div>
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Full Student Name *</label>
+              <input type="text" id="s-name" placeholder="e.g. Arun Kumar" required class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 focus:border-indigo-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Dept *</label>
+              <select id="s-dept" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 focus:border-indigo-500">
+                <option value="CSE" selected>CSE</option>
+                <option value="ECE">ECE</option>
+                <option value="MECH">MECH</option>
+                <option value="IT">IT</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Year *</label>
+              <select id="s-year" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 focus:border-indigo-500">
+                <option value="1">1st Year</option>
+                <option value="2">2nd Year</option>
+                <option value="3" selected>3rd Year</option>
+                <option value="4">4th Year</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Section *</label>
+              <select id="s-sec" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 focus:border-indigo-500">
+                <option value="A">Sec A</option>
+                <option value="B" selected>Sec B</option>
+                <option value="C">Sec C</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">Class Advisor</label>
+              <input type="text" id="s-advisor" placeholder="Class advisor name" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800">
+            </div>
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">HOD Name</label>
+              <input type="text" id="s-hod" placeholder="HOD name" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">HOD Email (For Instant Alerts)</label>
+              <input type="email" id="s-hod-email" placeholder="HOD email" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 font-mono">
+            </div>
+            <div>
+              <label class="block text-slate-600 mb-1 font-medium">HOD Phone Number</label>
+              <input type="tel" id="s-hod-phone" placeholder="HOD phone number" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-slate-800 font-mono">
+            </div>
+          </div>
+
+          <div class="border border-dashed border-slate-300 p-3.5 rounded-2xl bg-slate-50 space-y-2">
+            <label class="block text-slate-700 font-semibold">Face Photo &amp; 128D Embedding *</label>
+            <div class="flex items-center gap-3">
+              <div class="w-16 h-16 rounded-xl bg-white border border-slate-300 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+                <img id="s-preview-img" src="" class="hidden w-full h-full object-cover">
+                <i id="s-preview-icon" class="fa-solid fa-user text-slate-400 text-xl"></i>
+              </div>
+              <div class="flex-1 space-y-2">
+                <input type="file" id="s-photo" accept="image/*" class="block w-full text-slate-600 text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:text-white cursor-pointer">
+                <button type="button" onclick="snapCurrentCameraForEnrollment()" class="bg-white hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-xl border border-slate-300 text-[11px] transition shadow-sm font-medium">
+                  <i class="fa-solid fa-camera mr-1"></i>Snap Frame from Current Video
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="single-loader" class="hidden p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-700 text-xs font-mono animate-pulse">
+            Computing 128D facial landmark descriptors &amp; syncing to cloud...
+          </div>
+
+          <button type="submit" id="btn-save-single" class="w-full bg-indigo-600 hover:bg-indigo-700 py-3 rounded-xl font-bold text-white transition shadow-md shadow-indigo-600/30">
+            Enroll Student &amp; Sync Recognition Model
+          </button>
+          <button type="button" id="btn-cancel-edit" onclick="cancelStudentEdit()" class="hidden w-full bg-slate-100 hover:bg-slate-200 py-2.5 rounded-xl font-semibold text-slate-700 transition border border-slate-300">
+            Cancel Edit
+          </button>
+        </form>
+      </div>
+
+      <!-- TAB 2: Bulk Upload (Excel + ZIP) -->
+      <div id="tab-bulk" class="tab-content hidden space-y-4 text-xs">
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5">
+            <h4 class="font-bold text-indigo-700 text-sm flex items-center gap-1.5">
+              <i class="fa-solid fa-file-excel"></i> Step 1: Student Master Excel / CSV
+            </h4>
+            <p class="text-slate-500 text-[11px]">Columns: <code>regNo, name, department, year, section, advisorName, hodName, hodEmail, hodPhone</code></p>
+            <input type="file" id="bulk-excel-input" accept=".xlsx,.xls,.csv" class="w-full text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:text-white cursor-pointer">
+            <button onclick="processBulkExcel()" class="w-full bg-indigo-600 hover:bg-indigo-700 py-2 rounded-xl text-white font-semibold transition">
+              Parse &amp; Import Excel Rows
+            </button>
+            <div id="excel-status" class="text-[11px] font-mono text-slate-500"></div>
+          </div>
+
+          <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5">
+            <h4 class="font-bold text-emerald-700 text-sm flex items-center gap-1.5">
+              <i class="fa-solid fa-file-zipper"></i> Step 2: Photos ZIP Archive
+            </h4>
+            <p class="text-slate-500 text-[11px]">Files inside must be named with RegNo (e.g. <code>110324104105.jpg</code>)</p>
+            <input type="file" id="bulk-zip-input" accept=".zip" class="w-full text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-emerald-600 file:text-white cursor-pointer">
+            <button onclick="processBulkZip()" class="w-full bg-emerald-600 hover:bg-emerald-700 py-2 rounded-xl text-white font-semibold transition">
+              Extract ZIP &amp; Generate Descriptors
+            </button>
+            <div id="zip-status" class="text-[11px] font-mono text-slate-500"></div>
+          </div>
+        </div>
+
+        <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+          <span class="text-slate-600">Download formatted student template:</span>
+          <button onclick="downloadSampleStudentCSV()" class="text-indigo-600 hover:underline font-mono font-medium">
+            <i class="fa-solid fa-download mr-1"></i>students_sample.csv
+          </button>
+        </div>
+
+        <div class="border border-slate-200 rounded-2xl overflow-hidden">
+          <div class="p-3 bg-slate-100 flex items-center justify-between">
+            <span class="font-semibold text-slate-700">Uploaded Student Data</span>
+            <span id="admin-student-count" class="text-indigo-600 font-mono text-[11px]">0 Students</span>
+          </div>
+          <div id="admin-student-list" class="max-h-56 overflow-auto"></div>
+        </div>
+      </div>
+
+      <!-- TAB 3: Class Timetables Management -->
+      <div id="tab-tt" class="tab-content hidden space-y-3.5 text-xs">
+        <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+          <div class="flex justify-between items-center">
+            <h4 class="font-bold text-amber-700 text-sm flex items-center gap-1.5">
+              <i class="fa-solid fa-calendar-days"></i> Upload One Class Timetable
+            </h4>
+            <button onclick="downloadSampleTimetableCSV()" class="text-indigo-600 hover:underline text-[11px] font-mono font-medium">
+              <i class="fa-solid fa-download mr-1"></i>Sample timetable.csv
+            </button>
+          </div>
+          <p class="text-slate-500 text-[11px]">Choose a class first. Only that class will be replaced by this upload. Headers: <code>day, periodNumber, startTime, endTime, subjectName, facultyName, roomNo</code>.</p>
+          <select id="tt-target-class" onchange="selectAdminTimetableClass(this.value)" class="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-800 font-semibold focus:border-amber-500"></select>
+          <input type="file" id="bulk-tt-input" accept=".xlsx,.xls,.csv" class="w-full text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-amber-600 file:text-white cursor-pointer">
+          <button onclick="processBulkTimetable()" class="bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-xl text-white font-semibold transition">
+            Save Selected Class Timetable
+          </button>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-2">
+            <span class="font-semibold text-slate-700">Active Loaded Class Timetables:</span>
+            <span id="tt-classes-count" class="text-indigo-600 font-mono text-[11px]">0 Class Matrices</span>
+          </div>
+          <div id="tt-classes-list" class="space-y-2 max-h-40 overflow-y-auto pr-1"></div>
+        </div>
+        <div class="border border-slate-200 rounded-2xl overflow-hidden">
+          <div class="p-3 bg-slate-100 font-semibold text-slate-700">Uploaded Timetable Data</div>
+          <div id="admin-timetable-list" class="max-h-64 overflow-auto"></div>
+        </div>
+      </div>
+
+      <!-- TAB 5: User Approval -->
+      <div id="tab-users" class="tab-content hidden space-y-3.5 text-xs">
+        <form onsubmit="addApprovedUser(event)" class="grid grid-cols-1 sm:grid-cols-4 gap-2.5 bg-slate-50 border border-slate-200 p-3 rounded-2xl">
+          <input id="new-user-id" placeholder="User ID" required class="bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono">
+          <input id="new-user-name" placeholder="User name" required class="bg-white border border-slate-300 rounded-xl px-3 py-2">
+          <input id="new-user-pass" placeholder="Temporary password" required class="bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono">
+          <button class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-3 py-2 font-semibold">Add Approved User</button>
+        </form>
+        <div id="admin-users-list" class="border border-slate-200 rounded-2xl overflow-hidden"></div>
+      </div>
+
+      <!-- TAB 6: Scan History -->
+      <div id="tab-history" class="tab-content hidden space-y-3 text-xs">
+        <div class="flex justify-between items-center"><span class="font-semibold text-slate-700">Users and Scanned History</span><button onclick="renderScanHistory()" class="text-indigo-600 hover:underline">Refresh</button></div>
+        <div id="scan-history-list" class="max-h-[28rem] overflow-y-auto space-y-2"></div>
+      </div>
+
+      <!-- TAB 4: Incident Audits & Disciplinary Export -->
+      <div id="tab-audit" class="tab-content hidden space-y-3 text-xs">
+        <div class="flex justify-between items-center">
+          <span class="text-slate-600 font-medium">Historical Roaming Infractions:</span>
+          <div class="flex items-center gap-2">
+            <button onclick="exportAuditsToCSV()" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg font-mono text-[11px] transition border border-indigo-200">
+              <i class="fa-solid fa-file-export mr-1"></i>Export to CSV
+            </button>
+            <button onclick="clearAllAuditLogs()" class="text-rose-600 hover:underline">Clear History</button>
+          </div>
+        </div>
+        <div id="audit-logs-list" class="max-h-80 overflow-y-auto space-y-2 pr-1"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settings-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="engineering-panel bg-white/95 border border-slate-200 rounded-3xl p-5 max-h-[90vh] overflow-y-auto max-w-sm w-full space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center"><div><p id="settings-welcome" class="text-cyan-600 text-xs font-mono font-bold uppercase tracking-wider">Welcome</p><h2 class="font-bold text-lg text-slate-900">Application Settings</h2></div><button onclick="closeSettingsModal()" class="text-slate-400"><i class="fa-solid fa-xmark"></i></button></div>
+      <label class="block text-xs font-semibold text-slate-600">Theme<select id="setting-theme" onchange="applyAppSettings()" class="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2"><option value="light">Light Blueprint</option><option value="midnight">Midnight Command</option><option value="forest">Forest Lab</option><option value="ocean">Ocean Circuit</option><option value="sunset">Sunset Energy</option><option value="neon">Neon Prototype</option><option value="blueprint">Blue Grid</option></select></label>
+      <label class="block text-xs font-semibold text-slate-600">Font style<select id="setting-font" onchange="applyAppSettings()" class="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2"><option value="dm">DM Sans + Space Grotesk</option><option value="serif">Georgia</option><option value="mono">Monospace</option></select></label>
+      <p class="text-[11px] text-slate-500">Settings are saved on this device.</p>
+      <div class="border-t border-slate-200 pt-3 text-center">
+        <p class="text-[9px] uppercase text-slate-500">Developed by</p>
+        <p class="font-bold text-base text-transparent bg-clip-text bg-gradient-to-r from-cyan-700 via-teal-600 to-emerald-600">Surya <span class="text-slate-400">&amp;</span> Sakthivel</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIMETABLE VIEWER -->
+  <div id="timetable-viewer-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+    <div class="engineering-panel bg-white/95 rounded-3xl max-w-4xl w-full p-4 sm:p-6 space-y-4 my-auto shadow-2xl border border-slate-200">
+      <div class="flex justify-between items-start border-b border-slate-100 pb-3">
+        <div>
+          <div class="flex items-center gap-2 text-amber-600 font-bold text-sm">
+            <i class="fa-solid fa-calendar-days"></i>
+            <span>Updated Class Timetable Viewer</span>
+          </div>
+          <p id="timetable-viewer-status" class="text-[11px] text-slate-500 font-mono mt-1">Connecting cloud sync...</p>
+        </div>
+        <button onclick="closeTimetableViewer()" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs">
+        <select id="viewer-student" onchange="selectStudentTimetable(this.value)" class="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:border-cyan-500"></select>
+        <select id="viewer-class" onchange="renderTimetableViewer()" class="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:border-cyan-500"></select>
+        <input id="viewer-date" type="date" onchange="handleViewerDateChange()" class="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:border-cyan-500">
+        <select id="viewer-day" onchange="handleViewerDayChange()" class="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:border-cyan-500"></select>
+        <button onclick="refreshCloudData()" class="bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl px-3 py-2 font-semibold transition">
+          <i class="fa-solid fa-arrows-rotate mr-1"></i>Refresh Cloud Data
+        </button>
+      </div>
+
+      <div id="timetable-viewer-list" class="space-y-2 max-h-[60vh] overflow-y-auto pr-1"></div>
+    </div>
+  </div>
+
+  <!-- FLOATING TOAST -->
+  <div id="toast" class="fixed bottom-4 right-4 z-50 transform translate-y-24 opacity-0 transition-all duration-300 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl text-xs flex items-center gap-2 max-w-xs">
+    <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toast-msg">Action performed</span>
+  </div>
+
+  <nav class="mobile-bottom-nav" aria-label="Mobile navigation">
+    <button class="mobile-nav-item active" type="button" onclick="document.getElementById('user-login-modal')?.classList.contains('hidden') && requestCameraStart();">
+      <i class="fa-solid fa-camera text-sm"></i>
+      <span>Scan</span>
+    </button>
+    <button class="mobile-nav-item" type="button" onclick="openTimetableViewer()">
+      <i class="fa-solid fa-calendar-days text-sm"></i>
+      <span>Timetable</span>
+    </button>
+    <button class="mobile-nav-item" type="button" onclick="openSettingsModal()">
+      <i class="fa-solid fa-gear text-sm"></i>
+      <span>Settings</span>
+    </button>
+  </nav>
+
+  </div>
+
+  <!-- Modular Application Logic: Loaded with defer for parallel fetching and non-blocking parse -->
+  <script defer src="js/config.js"></script>
+  <script defer src="js/firebase-sync.js"></script>
+  <script defer src="js/timetable.js"></script>
+  <script defer src="js/incident.js"></script>
+  <script defer src="js/face-ai.js"></script>
+  <script defer src="js/camera.js"></script>
+  <script defer src="js/admin.js"></script>
+  <script defer src="js/app.js"></script>
+</body>
+</html>
