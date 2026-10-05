@@ -92,11 +92,26 @@ async function loadCloudData() {
       localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(mergedUsers));
     }
 
-    // 4. Process Incident Audits
+    // 4. Process Incident Audits safely (protect against localStorage 5MB quota exhaustion)
     if (auditResult.status === 'fulfilled' && !auditResult.value.empty) {
       const cloudAudits = [];
-      auditResult.value.forEach(doc => cloudAudits.push(doc.data()));
-      localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(cloudAudits));
+      auditResult.value.forEach(doc => {
+        const item = doc.data();
+        if (item.livePhoto && item.livePhoto.length > 50000) {
+          item.livePhoto = '';
+        }
+        cloudAudits.push(item);
+      });
+      const safeAudits = cloudAudits.slice(-50);
+      try {
+        localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(safeAudits));
+      } catch (quotaErr) {
+        try {
+          localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(safeAudits.slice(-15)));
+        } catch (e) {
+          console.warn('LocalStorage quota protected');
+        }
+      }
       const auditCountEl = document.getElementById('admin-audit-count');
       if (auditCountEl) auditCountEl.innerText = cloudAudits.length;
     }

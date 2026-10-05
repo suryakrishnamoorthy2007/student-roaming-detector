@@ -156,8 +156,21 @@ function getAuditLogs() {
 
 function saveAuditLog(entry) {
   const list = getAuditLogs();
-  list.unshift(entry);
-  localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(list));
+  const safeEntry = { ...entry };
+  if (safeEntry.livePhoto && safeEntry.livePhoto.length > 50000) {
+    safeEntry.livePhoto = '';
+  }
+  list.unshift(safeEntry);
+  const trimmed = list.slice(0, 50);
+  try {
+    localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(trimmed));
+  } catch (e) {
+    try {
+      localStorage.setItem(STORAGE_KEY_AUDITS, JSON.stringify(trimmed.slice(0, 15)));
+    } catch (err) {
+      console.warn('LocalStorage quota protected');
+    }
+  }
   const countEl = document.getElementById('admin-audit-count');
   if (countEl) countEl.innerText = list.length;
 }

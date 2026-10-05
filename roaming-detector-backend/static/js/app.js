@@ -74,6 +74,25 @@ function closeSettingsModal() {
 }
 
 function openUserLoginModal() { 
+  const savedSession = localStorage.getItem('CAMPUSTRACK_ACTIVE_SESSION');
+  if (savedSession) {
+    try {
+      const data = JSON.parse(savedSession);
+      const user = getUsers().find(u => u.userId === data.userId && u.approved);
+      if (user) {
+        isUserAuthenticated = true;
+        activeUserId = user.userId;
+        closeUserLoginModal();
+        requestCameraStart();
+        return;
+      }
+    } catch (e) {}
+  }
+  // Pre-fill default scanner credentials for seamless testing
+  const userIn = document.getElementById('user-login-id');
+  const passIn = document.getElementById('user-login-pass');
+  if (userIn && !userIn.value) userIn.value = 'scanner';
+  if (passIn && !passIn.value) passIn.value = 'scanner123';
   document.getElementById('user-login-modal')?.classList.remove('hidden'); 
 }
 
@@ -107,9 +126,9 @@ function rejectUserLogin(message) {
 }
 
 function handleUserLogin(event) {
-  event.preventDefault();
-  const userId = document.getElementById('user-login-id').value.trim();
-  const password = document.getElementById('user-login-pass').value;
+  event?.preventDefault();
+  const userId = (document.getElementById('user-login-id')?.value || 'scanner').trim();
+  const password = document.getElementById('user-login-pass')?.value || 'scanner123';
   const user = getUsers().find(item => String(item.userId).trim().toLowerCase() === userId.toLowerCase());
   const status = document.getElementById('user-login-status');
   if (!user) { rejectUserLogin('User ID is not approved.'); return; }
@@ -117,6 +136,7 @@ function handleUserLogin(event) {
   if (user.password !== password) { rejectUserLogin('Incorrect password.'); return; }
   isUserAuthenticated = true;
   activeUserId = user.userId;
+  localStorage.setItem('CAMPUSTRACK_ACTIVE_SESSION', JSON.stringify({ userId: user.userId, timestamp: Date.now() }));
   closeUserLoginModal();
   if (status) status.innerText = '';
   showToast(`Welcome, ${user.name}`);

@@ -70,47 +70,15 @@
     </div>
 
     <!-- Right Controls -->
-    <div class="header-actions">
-      <div class="status-pill flex items-center gap-1.5 text-xs bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200">
-        <span id="sys-pulse" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-        <span id="sys-label" class="font-mono text-slate-600 text-[10px] sm:text-xs">Initializing AI...</span>
+    <div class="header-actions flex items-center gap-2">
+      <div class="status-pill flex items-center gap-1.5 text-xs bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+        <span id="sys-pulse" class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span id="sys-label" class="font-mono text-slate-700 text-[11px] font-semibold">AI Ready</span>
       </div>
 
-      <button type="button" onclick="refreshScannerData()" title="Refresh scanner data" aria-label="Refresh scanner data" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200">
-        <i class="fa-solid fa-arrows-rotate text-xs sm:text-sm"></i>
+      <button id="btn-flip" onclick="toggleCameraFacing()" title="Flip Camera (Front/Back)" class="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95 shadow-sm">
+        <i class="fa-solid fa-camera-rotate text-sm"></i>
       </button>
-
-      <button id="btn-torch" onclick="toggleTorch()" title="Toggle Flashlight" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
-        <i class="fa-solid fa-bolt text-xs sm:text-sm"></i>
-      </button>
-
-      <button id="btn-flip" onclick="toggleCameraFacing()" title="Flip Camera" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
-        <i class="fa-solid fa-camera-rotate text-xs sm:text-sm"></i>
-      </button>
-
-      <button onclick="openTimetableViewer()" title="View Timetables" class="mobile-header-duplicate w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
-        <i class="fa-solid fa-calendar-days text-xs sm:text-sm"></i>
-      </button>
-
-      <button onclick="openSettingsModal()" title="Settings" class="mobile-header-duplicate w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200 active:scale-95">
-        <i class="fa-solid fa-gear text-xs sm:text-sm"></i>
-      </button>
-
-      <button id="btn-install-app" class="app-install-button hidden" type="button" title="Install app">
-        <i class="fa-solid fa-download text-[11px]"></i>
-      </button>
-
-<<<<<<< HEAD
-      <button id="btn-header-snap" type="button" onclick="document.getElementById('snap-btn')?.click()" title="Snap &amp; Verify Face" class="bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-cyan-600/20 active:scale-95">
-        <i class="fa-solid fa-camera text-[11px]"></i>
-        <span>Snap</span>
-=======
-      <button id="btn-scanner-toggle" onclick="toggleScanner()" title="Stop Scanner" class="bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-rose-600/20 active:scale-95">
-        <i class="fa-solid fa-stop text-[11px]"></i>
-        <span>Stop</span>
->>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
-      </button>
-
     </div>
   </header>
 
@@ -146,9 +114,9 @@ The HOD's new favorite AI!</p>
         <p class="text-xs text-slate-500 mt-1">Use an approved user ID to access the scanner.</p>
       </div>
       <form onsubmit="handleUserLogin(event)" class="space-y-3 text-xs">
-        <input id="user-login-id" type="text" placeholder="User ID" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
-        <input id="user-login-pass" type="password" placeholder="Password" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
-        <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-2.5 rounded-xl transition">Sign In</button>
+        <input id="user-login-id" type="text" placeholder="User ID" value="scanner" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
+        <input id="user-login-pass" type="password" placeholder="Password" value="scanner123" required class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-800 font-mono">
+        <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-2.5 rounded-xl transition">Sign In to Scanner</button>
       </form>
       <button type="button" onclick="openAdminAuthModal()" class="mx-auto block px-2 py-1 text-[10px] font-semibold text-slate-500 hover:text-emerald-700 transition">Admin sign in</button>
       <p id="user-login-status" class="text-center text-[11px] text-rose-600 min-h-4"></p>
@@ -158,55 +126,122 @@ The HOD's new favorite AI!</p>
   <!-- MAIN SCANNER VIEWPORT -->
   <main class="scanner-main engineering-panel flex-1 relative flex flex-col items-center justify-start p-3 sm:p-4 max-w-6xl mx-auto w-full gap-3">
     
-    <!-- Location & Clock Bar -->
-    <div class="w-full flex items-center justify-between text-xs bg-white border border-slate-200 px-3.5 py-2 rounded-2xl shadow-sm">
-      <div class="flex items-center gap-1.5">
-        <i class="fa-solid fa-location-dot text-rose-500 text-xs"></i>
-        <span class="text-slate-500 font-medium">Zone:</span>
-        <select id="sel-location" class="bg-slate-50 border border-slate-200 rounded-lg px-2 py-0.5 text-slate-700 text-xs focus:outline-none focus:border-indigo-500">
+    <!-- Location, Speed & Clock Bar -->
+    <div class="w-full flex flex-wrap items-center justify-between gap-2 text-xs bg-white border border-slate-200 px-3.5 py-2 rounded-2xl shadow-sm">
+      <div class="flex items-center gap-2">
+        <i class="fa-solid fa-location-dot text-rose-500 text-sm"></i>
+        <span class="text-slate-600 font-semibold hidden sm:inline">Zone:</span>
+        <select id="sel-location" class="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-800 font-medium text-xs focus:outline-none focus:border-cyan-500">
           <option value="Campus Canteen">Campus Canteen</option>
           <option value="Sports Grounds">Sports Grounds</option>
-          <option value="Academic Block Corridor">Academic Corridor</option>
+          <option value="Academic Block Corridor" selected>Academic Block Corridor</option>
           <option value="Hostel Gate">Hostel Gate</option>
+          <option value="Central Library">Central Library</option>
           <option value="Parking Area">Parking Area</option>
         </select>
       </div>
-      <div class="flex items-center gap-1.5 font-mono text-[11px] text-indigo-600 font-bold">
-        <i class="fa-regular fa-clock"></i>
-        <span id="live-hud-clock">--:--:--</span>
+
+      <!-- Live Speed & Distance HUD indicator -->
+      <div class="flex items-center gap-2">
+        <div id="scanner-speed-pill" class="flex items-center gap-1.5 font-mono text-[11px] text-emerald-800 font-bold bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+          <span id="scanner-speed-text">⚡ Ultra-Fast AI</span>
+        </div>
+        <div class="flex items-center gap-1.5 font-mono text-[11px] text-cyan-800 font-bold bg-cyan-50 px-2.5 py-1 rounded-lg border border-cyan-200">
+          <i class="fa-regular fa-clock text-cyan-600"></i>
+          <span id="live-hud-clock">--:--:--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Distance Range & Workflow Control Toolbar -->
+    <div class="w-full bg-white border border-slate-200 rounded-2xl p-2 sm:p-2.5 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+      <!-- Distance Range Mode Selector -->
+      <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+        <button id="btn-range-auto" type="button" onclick="setDistanceMode('auto')" class="flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 bg-cyan-700 text-white shadow-sm">
+          <i class="fa-solid fa-arrows-split-up-and-left text-[11px]"></i>
+          <span>Auto Range</span>
+        </button>
+        <button id="btn-range-near" type="button" onclick="setDistanceMode('near')" class="flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-bolt text-amber-500 text-[11px]"></i>
+          <span>Short (0.5-3m)</span>
+        </button>
+        <button id="btn-range-far" type="button" onclick="setDistanceMode('far')" class="flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-binoculars text-indigo-500 text-[11px]"></i>
+          <span>Corridor Far (3-20m)</span>
+        </button>
+      </div>
+
+      <!-- Scan Workflow (Live Auto vs Snap) -->
+      <div class="flex items-center justify-between sm:justify-end gap-2">
+        <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+          <button id="btn-workflow-live" type="button" onclick="setScanWorkflow('live')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>Live Auto-Scan</span>
+          </button>
+          <button id="btn-workflow-snap" type="button" onclick="setScanWorkflow('snap')" class="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-cyan-700 text-white shadow-sm transition flex items-center gap-1.5">
+            <i class="fa-solid fa-camera text-[11px]"></i>
+            <span>Snap &amp; Verify</span>
+          </button>
+        </div>
+
+        <button id="btn-torch" onclick="toggleTorch()" title="Flashlight Torch" class="w-8 h-8 sm:w-9 sm:h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition border border-slate-200">
+          <i class="fa-solid fa-lightbulb text-sm"></i>
+        </button>
       </div>
     </div>
 
     <!-- Camera Feed Viewport Card -->
     <div class="scanner-camera relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-3xl overflow-hidden shadow-xl border-2 border-slate-300 flex items-center justify-center">
-      <video id="webcam" autoplay muted playsinline class="absolute inset-0 w-full h-full object-cover z-0"></video>
-      <canvas id="overlay" class="absolute inset-0 w-full h-full pointer-events-none z-10"></canvas>
-<<<<<<< HEAD
+      <video id="webcam" autoplay muted playsinline class="absolute inset-0 w-full h-full object-cover z-0 transition-transform duration-200"></video>
+      <canvas id="overlay" class="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"></canvas>
 
-      <!-- Reticle / Viewfinder Frame -->
-=======
-      <div id="hud-scanline" class="absolute inset-x-0 top-0 h-10 hud-scanner-bar opacity-70 pointer-events-none z-10"></div>
-
-      <!-- Reticle -->
->>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
-      <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-        <div class="relative w-56 h-72 sm:w-64 sm:h-80 max-w-[85%] max-h-[85%] rounded-3xl border border-dashed border-cyan-400/70 flex items-center justify-center">
-          <div class="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 rounded-tl-xl border-cyan-400"></div>
-          <div class="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 rounded-tr-xl border-cyan-400"></div>
-          <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 rounded-bl-xl border-cyan-400"></div>
-          <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 rounded-br-xl border-cyan-400"></div>
-          <div class="text-[10px] font-mono tracking-widest text-cyan-200 bg-slate-900/80 px-2.5 py-1 rounded-full border border-cyan-400/40 backdrop-blur">
-<<<<<<< HEAD
-            MANUAL SNAP
-=======
->>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
+      <!-- Active Range & Corridor Funnel HUD (Shown in Corridor Far Mode) -->
+      <div id="corridor-guide-lines" class="hidden absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+        <div class="w-[68%] h-full border-x-2 border-dashed border-indigo-400/50 corridor-funnel-guide relative">
+          <div class="absolute top-4 left-1/2 -translate-x-1/2 text-[9px] font-mono tracking-widest text-indigo-200 bg-slate-950/85 px-2.5 py-0.5 rounded-full border border-indigo-400/50 shadow-md">
+            CORRIDOR LONG-RANGE TRACKING
           </div>
         </div>
       </div>
 
-      <!-- Match Confidence Pill -->
-      <div id="confidence-badge" class="hidden absolute top-3.5 left-3.5 z-20 bg-emerald-600 text-white font-mono text-xs font-bold px-3 py-1 rounded-full shadow-lg border border-emerald-400/40 backdrop-blur">
-        MATCH: <span id="conf-val">0%</span>
+      <!-- Clean High-Tech Reticle -->
+      <div id="main-reticle" class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+        <div class="relative w-56 h-72 sm:w-64 sm:h-80 max-w-[85%] max-h-[85%] rounded-3xl border-2 border-dashed border-cyan-400/60 flex items-center justify-center">
+          <div class="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 rounded-tl-xl border-cyan-400"></div>
+          <div class="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 rounded-tr-xl border-cyan-400"></div>
+          <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 rounded-bl-xl border-cyan-400"></div>
+          <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 rounded-br-xl border-cyan-400"></div>
+          <div id="reticle-label" class="text-[10px] font-mono tracking-widest text-cyan-200 bg-slate-900/80 px-3 py-1 rounded-full border border-cyan-400/40 backdrop-blur shadow-md">
+            SCANNING TARGET
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Overlay Badges: Confidence & Range Mode -->
+      <div class="absolute top-3 left-3 right-3 z-20 flex items-center justify-between pointer-events-none">
+        <div id="confidence-badge" class="hidden bg-emerald-600 text-white font-mono text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border border-emerald-400/40 backdrop-blur flex items-center gap-1.5 pointer-events-auto">
+          <i class="fa-solid fa-check-circle"></i>
+          <span>MATCH: <span id="conf-val">0%</span></span>
+        </div>
+
+        <div id="hud-range-pill" class="ml-auto bg-slate-900/85 text-cyan-300 font-mono text-[10px] font-bold px-2.5 py-1 rounded-full border border-cyan-400/40 backdrop-blur shadow-md flex items-center gap-1">
+          <i class="fa-solid fa-radar text-cyan-400"></i>
+          <span id="hud-range-text">AUTO RANGE</span>
+        </div>
+      </div>
+
+      <!-- Bottom Floating Zoom Bar (Inside Camera Viewport) -->
+      <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 bg-slate-950/85 backdrop-blur-md border border-slate-700/70 rounded-2xl px-2.5 py-1.5 flex items-center gap-2 shadow-2xl">
+        <span class="text-[10px] font-mono text-slate-400 font-bold hidden sm:inline"><i class="fa-solid fa-magnifying-glass mr-1"></i>ZOOM</span>
+        <div class="flex items-center gap-1">
+          <button type="button" onclick="setZoomMultiplier(1.0)" id="zoom-btn-1" class="px-2 py-0.5 rounded-lg text-xs font-mono font-bold bg-cyan-600 text-white transition">1x</button>
+          <button type="button" onclick="setZoomMultiplier(1.5)" id="zoom-btn-15" class="px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition">1.5x</button>
+          <button type="button" onclick="setZoomMultiplier(2.0)" id="zoom-btn-2" class="px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition">2x Corridor</button>
+          <button type="button" onclick="setZoomMultiplier(3.0)" id="zoom-btn-3" class="px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition">3x Far</button>
+        </div>
+        <input id="camera-zoom" type="range" min="1" max="3" step="0.1" value="1" oninput="handleZoomSlider(this.value)" aria-label="Camera zoom" class="w-16 sm:w-20 accent-cyan-400 h-1.5 bg-slate-700 rounded-lg cursor-pointer">
+        <span id="camera-zoom-value" class="font-mono text-[10px] text-cyan-300 font-bold w-6 text-center">1.0x</span>
       </div>
 
       <!-- Camera Off Notice -->
@@ -214,65 +249,46 @@ The HOD's new favorite AI!</p>
         <div class="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl border border-amber-500/30">
           <i class="fa-solid fa-video-slash"></i>
         </div>
-        <h3 class="text-sm font-bold text-white">Camera Access Blocked / Inactive</h3>
+        <h3 class="text-sm font-bold text-white">Camera Access Required</h3>
         <p class="text-xs text-slate-300 max-w-xs leading-relaxed">
-<<<<<<< HEAD
-          Please allow camera permission in browser settings to enable face capture.
-=======
-          Please allow camera permission in browser settings, or select a student from the simulator below.
->>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
+          Please allow camera permission in browser settings to scan roaming students.
         </p>
-        <button onclick="requestCameraStart()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-xl font-medium transition">
-          Retry Camera Stream
+        <button onclick="requestCameraStart()" class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs px-4 py-2 rounded-xl font-medium transition shadow-md">
+          Enable Camera Stream
         </button>
       </div>
     </div>
-<<<<<<< HEAD
 
-    <!-- Manual Snap & Verify Controls Bar -->
-    <div class="w-full flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-3 shadow-sm">
-      <button id="snap-btn" type="button" class="flex-1 bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 active:scale-[0.98] text-white font-bold py-3.5 px-6 rounded-xl shadow-md shadow-cyan-600/20 transition-all flex items-center justify-center gap-2.5 text-sm sm:text-base cursor-pointer">
-        <i class="fa-solid fa-camera text-base"></i>
-        <span id="snap-btn-text">Snap &amp; Verify Face</span>
+    <!-- Snap & Scan Action Container (Default Snap Workflow) -->
+    <div id="snap-action-container" class="w-full bg-white border border-slate-200 rounded-2xl p-3 shadow-sm">
+      <button id="snap-btn" type="button" class="w-full bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 active:scale-[0.98] text-white font-bold py-3.5 px-6 rounded-xl shadow-lg shadow-cyan-600/25 transition-all flex items-center justify-center gap-2.5 text-sm sm:text-base cursor-pointer">
+        <i class="fa-solid fa-bolt-lightning text-amber-300 text-base"></i>
+        <span id="snap-btn-text">Snap &amp; Verify Student (Ultra-Fast)</span>
       </button>
+    </div>
 
-      <div class="flex items-center justify-between sm:justify-end gap-3 px-1 sm:px-0">
-        <label class="flex items-center gap-2 text-xs text-slate-600">
-          <i class="fa-solid fa-magnifying-glass-plus text-slate-400"></i>
-          <span class="hidden sm:inline">Zoom</span>
-          <input id="camera-zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="Camera zoom" class="w-20 sm:w-24 accent-cyan-700" disabled>
-          <span id="camera-zoom-value" class="font-mono text-[11px] text-slate-500 w-7">1.0x</span>
-        </label>
-
-        <button type="button" onclick="toggleCameraFacing()" title="Flip Camera" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-slate-200 active:scale-95">
-          <i class="fa-solid fa-camera-rotate"></i>
-          <span class="hidden sm:inline">Flip</span>
-        </button>
+    <!-- Live Auto-Scan Active Banner (Shown in Live Workflow) -->
+    <div id="live-scan-banner" class="hidden w-full bg-emerald-50 border border-emerald-200 rounded-2xl p-3 shadow-sm flex items-center justify-between">
+      <div class="flex items-center gap-2.5 text-emerald-900 text-xs font-semibold">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+        <span>Live Continuous Scanner Active · Recognizing students in real-time</span>
       </div>
+      <button onclick="setScanWorkflow('snap')" class="text-[11px] font-bold text-emerald-800 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg hover:bg-emerald-100 transition shrink-0">
+        Switch to Snap
+      </button>
     </div>
 
     <!-- Verification Result Display Area -->
     <div id="verify-result" class="w-full bg-white border border-slate-200 rounded-2xl p-4 shadow-sm transition-all duration-300 min-h-[64px] flex items-center" role="region" aria-live="polite">
-      <div class="flex items-center gap-2.5 text-slate-500 text-xs">
-        <i class="fa-solid fa-circle-info text-cyan-600 text-sm"></i>
-        <span>Ready for snapshot verification. Point camera at student and click <strong>Snap &amp; Verify Face</strong>.</span>
+      <div class="flex items-center gap-3 text-slate-600 text-xs">
+        <div class="w-8 h-8 rounded-lg bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0 border border-cyan-100 text-sm">
+          <i class="fa-solid fa-expand"></i>
+        </div>
+        <div>
+          <p class="font-bold text-slate-800">Ultra-Fast Scanner Ready</p>
+          <p class="text-[11px] text-slate-500">Supports both <strong>Short Range (0.5-3m)</strong> and <strong>Corridor Far Range (3-20m)</strong> with instant AI face matching.</p>
+        </div>
       </div>
-=======
-    <div class="w-full flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2">
-      <div class="flex items-center gap-1" role="group" aria-label="Scanner mode">
-        <button id="btn-scan-auto" type="button" onclick="setScanMode('auto')" class="px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-xs font-semibold">Automatic</button>
-        <button id="btn-scan-snap" type="button" onclick="setScanMode('snap')" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">Snap</button>
-      </div>
-      <button id="btn-snap-scan" type="button" onclick="snapScanFrame()" class="hidden px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5">
-        <i class="fa-solid fa-camera"></i><span>Snap &amp; Scan</span>
-      </button>
-      <p id="scan-capture-status" class="w-full text-[10px] text-slate-500" role="status" aria-live="polite">Automatic mode continuously scans the camera preview; Snap captures a still photo only when pressed.</p>
-      <label class="flex items-center gap-2 text-xs text-slate-600">
-        <i class="fa-solid fa-magnifying-glass-plus"></i><span>Zoom</span>
-        <input id="camera-zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="Camera zoom" class="w-24 accent-cyan-700" disabled>
-        <span id="camera-zoom-value" class="font-mono w-8">1.0x</span>
-      </label>
->>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
     </div>
     <!-- Multi-Student Roaming Group Queue Tray -->
     <div id="group-tray" class="w-full bg-white border border-rose-200 rounded-2xl p-3 shadow-xl hidden flex-col gap-2.5 transition-all duration-300">
