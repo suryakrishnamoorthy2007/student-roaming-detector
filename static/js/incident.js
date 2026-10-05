@@ -31,6 +31,7 @@ function playCue(type) {
     if (synth) {
       if (type === 'match') synth.triggerAttackRelease(["F#5", "A#5", "C#6"], "16n");
       else if (type === 'alert') synth.triggerAttackRelease(["D4", "G3"], "8n");
+      else if (type === 'snap') synth.triggerAttackRelease(["C5", "E5"], "32n");
     }
   } catch (e) {}
 }

@@ -213,11 +213,13 @@ function setScanWorkflow(workflow) {
   if (btnSnap) btnSnap.className = workflow === 'snap' ? activeCls : inactiveCls;
 
   if (workflow === 'live') {
+    if (typeof unfreezeScannerView === 'function') unfreezeScannerView();
     if (liveBanner) liveBanner.classList.remove('hidden');
     if (snapContainer) snapContainer.classList.add('hidden');
     startLiveAutoScanLoop();
     showToast('Live Auto-Scan Active: Tracking corridor in real-time');
   } else {
+    if (typeof unfreezeScannerView === 'function') unfreezeScannerView();
     if (liveBanner) liveBanner.classList.add('hidden');
     if (snapContainer) snapContainer.classList.remove('hidden');
     stopLiveAutoScanLoop();
@@ -279,12 +281,13 @@ function handleZoomSlider(val) {
  * Core Ultra-Fast Multi-Distance Neural Scanning Engine.
  * Executes detection without main-thread blocking or redundant conversions.
  */
-async function executeUltraFastScan(manualSnap = false) {
+async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
   const video = document.getElementById('webcam');
   const canvas = document.getElementById('overlay');
   const badge = document.getElementById('confidence-badge');
 
-  if (!video || !videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+  const inputElement = sourceInput || video;
+  if (!inputElement || (!sourceInput && (!videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA))) {
     return { matches: [], error: 'Camera stream inactive' };
   }
   if (!faceModelsReady || !faceMatcher) {
@@ -298,8 +301,8 @@ async function executeUltraFastScan(manualSnap = false) {
   const startTime = performance.now();
 
   try {
-    const origW = video.videoWidth || 1280;
-    const origH = video.videoHeight || 720;
+    const origW = sourceInput ? (sourceInput.width || 1280) : (video ? (video.videoWidth || 1280) : 1280);
+    const origH = sourceInput ? (sourceInput.height || 720) : (video ? (video.videoHeight || 720) : 720);
 
     if (canvas && (canvas.width !== origW || canvas.height !== origH)) {
       canvas.width = origW;
@@ -315,7 +318,7 @@ async function executeUltraFastScan(manualSnap = false) {
     if (scanDistanceMode === 'near') {
       // 1. SHORT RANGE (0.5m - 3m): Ultra-fast 320px tensor (~20ms)
       const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.28 });
-      rawDetections = await faceapi.detectAllFaces(video, detectorOpts)
+      rawDetections = await faceapi.detectAllFaces(inputElement, detectorOpts)
         .withFaceLandmarks(useTinyLandmarks)
         .withFaceDescriptors();
 
@@ -333,7 +336,7 @@ async function executeUltraFastScan(manualSnap = false) {
       cropCanvas.width = cropW;
       cropCanvas.height = cropH;
       const cropCtx = cropCanvas.getContext('2d');
-      cropCtx.drawImage(video, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
+      cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
 
       const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.16 });
       rawDetections = await faceapi.detectAllFaces(cropCanvas, detectorOpts)
@@ -346,7 +349,7 @@ async function executeUltraFastScan(manualSnap = false) {
       // 3. AUTO RANGE (SMART PROGRESSIVE HIERARCHICAL):
       // Pass 1: Fast Near/Mid pass (320px)
       const fastOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.25 });
-      const pass1Detections = await faceapi.detectAllFaces(video, fastOpts)
+      const pass1Detections = await faceapi.detectAllFaces(inputElement, fastOpts)
         .withFaceLandmarks(useTinyLandmarks)
         .withFaceDescriptors();
 
@@ -378,7 +381,7 @@ async function executeUltraFastScan(manualSnap = false) {
         cropCanvas.width = cropW;
         cropCanvas.height = cropH;
         const cropCtx = cropCanvas.getContext('2d');
-        cropCtx.drawImage(video, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
+        cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
 
         const farOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.16 });
         const pass2Detections = await faceapi.detectAllFaces(cropCanvas, farOpts)
@@ -499,8 +502,8 @@ async function executeUltraFastScan(manualSnap = false) {
           }
         }
 
-        // Auto-clear overlay timer for Snap mode
-        if (manualSnap) {
+        // Auto-clear overlay timer for live manual scan (keep on frozen snapshot until retake)
+        if (manualSnap && !sourceInput) {
           if (window._overlayClearTimer) clearTimeout(window._overlayClearTimer);
           window._overlayClearTimer = setTimeout(() => {
             if (canvas) {
@@ -539,51 +542,145 @@ async function executeUltraFastScan(manualSnap = false) {
 }
 
 /**
- * Instant Snap & Verify Handler attached to the main camera button.
+ * Freezes the scanner viewport display with the captured photo so the operator
+ * does not have to keep pointing the camera at the student while AI verifies.
+ */
+function freezeScannerView(imageUrl) {
+  window._lastCapturedSnapshotUrl = imageUrl;
+  const freezeImg = document.getElementById('snap-freeze-preview');
+  const freezeIndicator = document.getElementById('snap-frozen-indicator');
+  const reticle = document.getElementById('main-reticle');
+
+  if (freezeImg) {
+    freezeImg.src = imageUrl;
+    freezeImg.classList.remove('hidden');
+  }
+  if (freezeIndicator) {
+    freezeIndicator.classList.remove('hidden');
+    const textEl = document.getElementById('snap-frozen-text');
+    if (textEl) textEl.innerText = '📸 Photo Captured · Verifying face...';
+  }
+  if (reticle) reticle.classList.add('opacity-30');
+}
+
+/**
+ * Unfreezes the scanner viewport and returns cleanly to live camera feed.
+ */
+function unfreezeScannerView() {
+  window._lastCapturedSnapshotUrl = null;
+  const freezeImg = document.getElementById('snap-freeze-preview');
+  const freezeIndicator = document.getElementById('snap-frozen-indicator');
+  const canvas = document.getElementById('overlay');
+  const badge = document.getElementById('confidence-badge');
+  const reticle = document.getElementById('main-reticle');
+  const snapBtn = document.getElementById('snap-btn');
+
+  if (freezeImg) {
+    freezeImg.classList.add('hidden');
+    freezeImg.src = '';
+  }
+  if (freezeIndicator) {
+    freezeIndicator.classList.add('hidden');
+  }
+  if (canvas) {
+    const c = canvas.getContext('2d');
+    c.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  if (badge) badge.classList.add('hidden');
+  if (reticle) reticle.classList.remove('opacity-30');
+
+  if (snapBtn && !detectionInProgress) {
+    snapBtn.disabled = false;
+    snapBtn.classList.remove('opacity-80', 'cursor-not-allowed');
+    snapBtn.innerHTML = `
+      <i class="fa-solid fa-bolt-lightning text-amber-300 text-base"></i>
+      <span>Snap &amp; Verify Student</span>
+    `;
+  }
+}
+
+/**
+ * Instant Snap & Verify Handler:
+ * Captures the photo ONCE at the instant of the click into an offscreen canvas,
+ * freezes the viewfinder with the captured photo immediately,
+ * and executes AI face recognition and verification exclusively on that captured photo.
+ * The user does NOT need to keep the phone held continuously facing the student.
  */
 async function handleSnapAndVerify() {
   const snapBtn = document.getElementById('snap-btn');
   const resultArea = document.getElementById('verify-result');
   const video = document.getElementById('webcam');
 
+  // If already frozen from a previous snap, unfreeze first to allow fresh capture
+  if (window._lastCapturedSnapshotUrl) {
+    unfreezeScannerView();
+    await new Promise(r => requestAnimationFrame(r));
+  }
+
   if (!video || !videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
     showToast('Camera is not active or ready');
     return;
   }
 
-  // 1. Show immediate UI response
+  // 1. Shutter sound cue & screen flash effect
+  if (typeof playCue === 'function') {
+    playCue('snap');
+  }
+  const shutterFlash = document.getElementById('camera-shutter-flash');
+  if (shutterFlash) {
+    shutterFlash.style.opacity = '0.9';
+    setTimeout(() => { shutterFlash.style.opacity = '0'; }, 130);
+  }
+
+  // 2. Immediately capture the still photo frame from the camera stream at this exact instant
+  const snapCanvas = document.createElement('canvas');
+  snapCanvas.width = video.videoWidth || 1280;
+  snapCanvas.height = video.videoHeight || 720;
+  const snapCtx = snapCanvas.getContext('2d');
+  snapCtx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
+  const liveSnapshotUrl = snapCanvas.toDataURL('image/jpeg', 0.88);
+
+  // 3. Freeze the viewfinder with the captured photo right away
+  freezeScannerView(liveSnapshotUrl);
+
+  // 4. Update Snap button to reassure the user that photo is already captured
   if (snapBtn) {
     snapBtn.disabled = true;
     snapBtn.classList.add('opacity-80', 'cursor-not-allowed');
     snapBtn.innerHTML = `
       <i class="fa-solid fa-circle-notch fa-spin text-base"></i>
-      <span>Scanning Faces (Ultra-Fast)...</span>
+      <span>Analyzing Photo... (You can lower camera)</span>
     `;
   }
 
   if (resultArea) {
     resultArea.innerHTML = `
-      <div class="flex items-center gap-3 text-cyan-800 bg-cyan-50 border border-cyan-200 rounded-xl p-3.5 text-xs font-medium w-full">
-        <i class="fa-solid fa-circle-notch fa-spin text-cyan-600 text-base shrink-0"></i>
-        <div>
-          <p class="font-bold text-slate-800">Processing Viewfinder...</p>
-          <p class="text-[11px] text-slate-500">Checking corridor &amp; short range face signatures...</p>
+      <div class="flex items-center justify-between gap-3 text-cyan-800 bg-cyan-50 border border-cyan-200 rounded-xl p-3.5 text-xs font-medium w-full">
+        <div class="flex items-center gap-2.5">
+          <i class="fa-solid fa-circle-notch fa-spin text-cyan-600 text-base shrink-0"></i>
+          <div>
+            <p class="font-bold text-slate-800">Photo Snapped · Processing Faces...</p>
+            <p class="text-[11px] text-slate-500">Photo captured instantly. You do not need to keep holding phone toward student.</p>
+          </div>
         </div>
+        <img src="${liveSnapshotUrl}" class="w-10 h-10 rounded-lg object-cover border border-cyan-300 shadow-sm shrink-0">
       </div>
     `;
   }
 
   try {
-    const scanResult = await executeUltraFastScan(true);
+    // 5. Run AI face detection exclusively on the captured photo frame
+    const scanResult = await executeUltraFastScan(true, snapCanvas);
     const matches = scanResult.matches || [];
 
     if (matches.length > 0) {
-      // Capture live snapshot for student record
-      const liveSnapshotUrl = captureScannerFrame(0.82);
-
-      // Play audio chime
       if (typeof playCue === 'function') {
         playCue('match');
+      }
+
+      const freezeIndicatorText = document.getElementById('snap-frozen-text');
+      if (freezeIndicatorText) {
+        freezeIndicatorText.innerText = `📸 Identified ${matches.length} Student${matches.length > 1 ? 's' : ''}`;
       }
 
       // Render recognized students
@@ -595,9 +692,10 @@ async function handleSnapAndVerify() {
                 <i class="fa-solid fa-users-viewfinder text-cyan-600"></i>
                 ${matches.length} Student${matches.length > 1 ? 's' : ''} Identified (${scanResult.durationMs}ms)
               </span>
-              <span class="text-[10px] font-mono text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                Ready for Next Scan
-              </span>
+              <button type="button" onclick="unfreezeScannerView()" class="text-[11px] font-bold text-cyan-700 hover:text-cyan-900 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 px-2.5 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer">
+                <i class="fa-solid fa-camera-rotate text-[10px]"></i>
+                <span>Retake / Resume</span>
+              </button>
             </div>
             <div class="space-y-2 max-h-60 overflow-y-auto pr-1">
         `;
@@ -629,7 +727,7 @@ async function handleSnapAndVerify() {
                 <span class="${isViolation ? 'bg-rose-600' : 'bg-emerald-600'} text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">
                   ${m.conf}% Match
                 </span>
-                <button onclick="triggerVerification('${s.regNo}', '${liveSnapshotUrl}', ${m.conf})" class="mt-1 block text-[11px] font-bold ${isViolation ? 'text-rose-700 hover:text-rose-900' : 'text-emerald-700 hover:text-emerald-900'} underline">
+                <button onclick="triggerVerification('${s.regNo}', '${liveSnapshotUrl}', ${m.conf})" class="mt-1 block text-[11px] font-bold ${isViolation ? 'text-rose-700 hover:text-rose-900' : 'text-emerald-700 hover:text-emerald-900'} underline cursor-pointer">
                   Details &rarr;
                 </button>
               </div>
@@ -639,7 +737,7 @@ async function handleSnapAndVerify() {
 
         if (matches.length >= 2) {
           html += `
-            <button onclick="dispatchMultiDetectedGroup(${JSON.stringify(matches.map(m => m.student.regNo)).replace(/"/g, '&quot;')}, '${liveSnapshotUrl}')" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2 rounded-xl text-xs transition shadow-md flex items-center justify-center gap-2 active:scale-95">
+            <button onclick="dispatchMultiDetectedGroup(${JSON.stringify(matches.map(m => m.student.regNo)).replace(/"/g, '&quot;')}, '${liveSnapshotUrl}')" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2 rounded-xl text-xs transition shadow-md flex items-center justify-center gap-2 active:scale-95 cursor-pointer">
               <i class="fa-solid fa-bullhorn"></i>
               <span>Alert HOD for All ${matches.length} Roaming Students</span>
             </button>
@@ -653,20 +751,30 @@ async function handleSnapAndVerify() {
         resultArea.innerHTML = html;
       }
 
-      showToast(`⚡ ${matches.length} student${matches.length > 1 ? 's' : ''} verified in ${scanResult.durationMs}ms`);
+      showToast(`⚡ ${matches.length} student${matches.length > 1 ? 's' : ''} verified in ${scanResult.durationMs}ms from photo`);
     } else {
+      const freezeIndicatorText = document.getElementById('snap-frozen-text');
+      if (freezeIndicatorText) {
+        freezeIndicatorText.innerText = '📸 Photo Analyzed · No match';
+      }
       if (resultArea) {
         resultArea.innerHTML = `
-          <div class="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800 w-full">
-            <i class="fa-solid fa-triangle-exclamation text-amber-600 text-base shrink-0"></i>
-            <div>
-              <p class="font-bold text-slate-800">No Enrolled Students Recognized</p>
-              <p class="text-[11px] text-amber-700">Scanned in ${scanResult.durationMs || 30}ms. No registered students matched. Point camera at student and tap Snap.</p>
+          <div class="space-y-2.5 w-full">
+            <div class="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800 w-full">
+              <i class="fa-solid fa-triangle-exclamation text-amber-600 text-base shrink-0"></i>
+              <div>
+                <p class="font-bold text-slate-800">No Enrolled Students Recognized</p>
+                <p class="text-[11px] text-amber-700">Photo captured and processed in ${scanResult.durationMs || 30}ms. No registered student face matched the snapshot.</p>
+              </div>
             </div>
+            <button type="button" onclick="unfreezeScannerView()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-xl text-xs transition border border-slate-300 flex items-center justify-center gap-1.5 cursor-pointer">
+              <i class="fa-solid fa-camera-rotate"></i>
+              <span>Retake Photo / Resume Camera</span>
+            </button>
           </div>
         `;
       }
-      showToast('No registered students recognized');
+      showToast('No registered students recognized in photo');
     }
   } catch (err) {
     console.error('Snap error:', err);
@@ -677,7 +785,7 @@ async function handleSnapAndVerify() {
       snapBtn.classList.remove('opacity-80', 'cursor-not-allowed');
       snapBtn.innerHTML = `
         <i class="fa-solid fa-bolt-lightning text-amber-300 text-base"></i>
-        <span>Snap &amp; Verify Student (Ultra-Fast)</span>
+        <span>Snap &amp; Verify Student</span>
       `;
     }
   }
@@ -834,6 +942,8 @@ function enrollCapturedFaceAsDemoStudent(regNo = '110324104105') {
 window.initAI = initAI;
 window.executeUltraFastScan = executeUltraFastScan;
 window.handleSnapAndVerify = handleSnapAndVerify;
+window.freezeScannerView = freezeScannerView;
+window.unfreezeScannerView = unfreezeScannerView;
 window.setDistanceMode = setDistanceMode;
 window.setScanWorkflow = setScanWorkflow;
 window.setZoomMultiplier = setZoomMultiplier;

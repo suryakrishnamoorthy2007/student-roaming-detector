@@ -88,11 +88,11 @@ function openUserLoginModal() {
       }
     } catch (e) {}
   }
-  // Pre-fill default scanner credentials for seamless testing
+  // Ensure inputs are clean and no credentials are shown on entering
   const userIn = document.getElementById('user-login-id');
   const passIn = document.getElementById('user-login-pass');
-  if (userIn && !userIn.value) userIn.value = 'scanner';
-  if (passIn && !passIn.value) passIn.value = 'scanner123';
+  if (userIn) userIn.value = '';
+  if (passIn) passIn.value = '';
   document.getElementById('user-login-modal')?.classList.remove('hidden'); 
 }
 
@@ -114,7 +114,6 @@ function rejectUserLogin(message) {
   const userIn = document.getElementById('user-login-id');
   const passIn = document.getElementById('user-login-pass');
   const status = document.getElementById('user-login-status');
-  if (userIn) userIn.value = '';
   if (passIn) passIn.value = '';
   if (status) status.innerText = message;
   if (loginPanel) {
@@ -122,13 +121,18 @@ function rejectUserLogin(message) {
     void loginPanel.offsetWidth;
     loginPanel.classList.add('login-panel-error');
   }
-  if (userIn) userIn.focus();
+  if (userIn && !userIn.value) userIn.focus();
+  else if (passIn) passIn.focus();
 }
 
 function handleUserLogin(event) {
   event?.preventDefault();
-  const userId = (document.getElementById('user-login-id')?.value || 'scanner').trim();
-  const password = document.getElementById('user-login-pass')?.value || 'scanner123';
+  const userId = (document.getElementById('user-login-id')?.value || '').trim();
+  const password = document.getElementById('user-login-pass')?.value || '';
+  if (!userId || !password) {
+    rejectUserLogin('Please enter both User ID and password.');
+    return;
+  }
   const user = getUsers().find(item => String(item.userId).trim().toLowerCase() === userId.toLowerCase());
   const status = document.getElementById('user-login-status');
   if (!user) { rejectUserLogin('User ID is not approved.'); return; }
@@ -142,6 +146,28 @@ function handleUserLogin(event) {
   showToast(`Welcome, ${user.name}`);
   requestCameraStart();
 }
+
+function handleUserLogout() {
+  localStorage.removeItem('CAMPUSTRACK_ACTIVE_SESSION');
+  isUserAuthenticated = false;
+  activeUserId = '';
+  if (typeof stopCameraStream === 'function') {
+    stopCameraStream();
+  }
+  if (typeof unfreezeScannerView === 'function') {
+    unfreezeScannerView();
+  }
+  const userIn = document.getElementById('user-login-id');
+  const passIn = document.getElementById('user-login-pass');
+  const status = document.getElementById('user-login-status');
+  if (userIn) userIn.value = '';
+  if (passIn) passIn.value = '';
+  if (status) status.innerText = '';
+  
+  openUserLoginModal();
+  showToast('Logged out of Scanner');
+}
+window.handleUserLogout = handleUserLogout;
 
 function applyAppSettings() {
   const theme = document.getElementById('setting-theme')?.value || 'light';

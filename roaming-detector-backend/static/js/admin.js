@@ -71,6 +71,22 @@ function closeAdminDashboard() {
   openUserLoginModal();
 }
 
+function handleAdminLogout() {
+  document.getElementById('admin-dashboard-modal')?.classList.add('hidden');
+  isUserAuthenticated = false;
+  activeUserId = '';
+  localStorage.removeItem('CAMPUSTRACK_ACTIVE_SESSION');
+  const authUser = document.getElementById('auth-user');
+  const authPass = document.getElementById('auth-pass');
+  const authStatus = document.getElementById('admin-auth-status');
+  if (authUser) authUser.value = '';
+  if (authPass) authPass.value = '';
+  if (authStatus) authStatus.innerText = '';
+  openUserLoginModal();
+  showToast('Admin logged out successfully');
+}
+window.handleAdminLogout = handleAdminLogout;
+
 function switchAdminTab(tabId) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
   document.querySelectorAll('.tab-btn').forEach(b => {

@@ -190,7 +190,22 @@ function configureCameraZoom() {
   };
 }
 
+function stopCameraStream() {
+  if (videoStream) {
+    videoStream.getTracks().forEach(t => t.stop());
+    videoStream = null;
+  }
+  const video = document.getElementById('webcam');
+  if (video) {
+    video.srcObject = null;
+  }
+}
+window.stopCameraStream = stopCameraStream;
+
 function captureScannerFrame(quality = 0.82) {
+  if (window._lastCapturedSnapshotUrl) {
+    return window._lastCapturedSnapshotUrl;
+  }
   const video = document.getElementById('webcam');
   if (!video) return '';
   const snapshot = document.createElement('canvas');
