@@ -7,7 +7,11 @@ let faceModelsReady = false;
 let useTinyLandmarks = false;
 let isDetectionPaused = false;
 let detectionInProgress = false;
+<<<<<<< HEAD
 let scanMode = 'snap';
+=======
+let scanMode = 'auto';
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
 let scanInterval = null;
 let autoScanFlushTimer = null;
 let autoScanCandidates = new Map();
@@ -108,10 +112,40 @@ let lastFrameTime = 0;
 const FRAME_THROTTLE_MS = 220; // ~4.5 FPS keeps phone cool and UI fluid
 
 function startContinuousDetectionLoop() {
+<<<<<<< HEAD
   if (scanInterval) {
     cancelAnimationFrame(scanInterval);
     scanInterval = null;
   }
+=======
+  if (scanInterval) cancelAnimationFrame(scanInterval);
+
+  const videoEl = document.getElementById('webcam');
+  const canvasEl = document.getElementById('overlay');
+  if (!videoEl || !canvasEl) return;
+
+  const displaySize = { width: videoEl.videoWidth || 1280, height: videoEl.videoHeight || 720 };
+  if (window.faceapi) {
+    faceapi.matchDimensions(canvasEl, displaySize);
+  }
+  
+  const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.45 });
+
+  const loop = async (timestamp) => {
+    if (timestamp - lastFrameTime >= FRAME_THROTTLE_MS) {
+      lastFrameTime = timestamp;
+      const shouldScan = scanMode === 'auto' && !isDetectionPaused && !videoEl.paused && !videoEl.ended
+        && faceModelsReady && faceMatcher && !detectionInProgress
+        && videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+
+      if (shouldScan) {
+        await detectAndProcessFrame(false, detectorOptions);
+      }
+    }
+    scanInterval = requestAnimationFrame(loop);
+  };
+  scanInterval = requestAnimationFrame(loop);
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
 }
 
 async function detectAndProcessFrame(manualSnap = false, detectorOptions = null, snapshotImage = null, snapshotImageUrl = null) {
@@ -169,15 +203,23 @@ async function detectAndProcessFrame(manualSnap = false, detectorOptions = null,
     } else if (scanMode === 'snap' && manualSnap) {
       showToast('No recognized student in the captured photo');
     }
+<<<<<<< HEAD
     const statusEl = document.getElementById('scan-capture-status');
     if (manualSnap && statusEl) statusEl.innerText = `Photo captured at ${new Date().toLocaleTimeString()}. Face check complete.`;
+=======
+    if (manualSnap) document.getElementById('scan-capture-status').innerText = `Photo captured at ${new Date().toLocaleTimeString()}. Face check complete.`;
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
   } catch (error) {
     console.warn('Face scan failed:', error);
     if (manualSnap) showToast('Face check failed for the captured photo');
   } finally {
     detectionInProgress = false;
+<<<<<<< HEAD
     const statusEl = document.getElementById('scan-capture-status');
     if (manualSnap && statusEl) statusEl.innerText = `Photo captured at ${new Date().toLocaleTimeString()}. Face check finished.`;
+=======
+    if (manualSnap) document.getElementById('scan-capture-status').innerText = `Photo captured at ${new Date().toLocaleTimeString()}. Face check finished.`;
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
   }
 }
 

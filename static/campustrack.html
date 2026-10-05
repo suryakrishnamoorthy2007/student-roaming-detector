@@ -100,9 +100,15 @@
         <i class="fa-solid fa-download text-[11px]"></i>
       </button>
 
+<<<<<<< HEAD
       <button id="btn-header-snap" type="button" onclick="document.getElementById('snap-btn')?.click()" title="Snap &amp; Verify Face" class="bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-cyan-600/20 active:scale-95">
         <i class="fa-solid fa-camera text-[11px]"></i>
         <span>Snap</span>
+=======
+      <button id="btn-scanner-toggle" onclick="toggleScanner()" title="Stop Scanner" class="bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-rose-600/20 active:scale-95">
+        <i class="fa-solid fa-stop text-[11px]"></i>
+        <span>Stop</span>
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
       </button>
 
     </div>
@@ -175,8 +181,14 @@ The HOD's new favorite AI!</p>
     <div class="scanner-camera relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-3xl overflow-hidden shadow-xl border-2 border-slate-300 flex items-center justify-center">
       <video id="webcam" autoplay muted playsinline class="absolute inset-0 w-full h-full object-cover z-0"></video>
       <canvas id="overlay" class="absolute inset-0 w-full h-full pointer-events-none z-10"></canvas>
+<<<<<<< HEAD
 
       <!-- Reticle / Viewfinder Frame -->
+=======
+      <div id="hud-scanline" class="absolute inset-x-0 top-0 h-10 hud-scanner-bar opacity-70 pointer-events-none z-10"></div>
+
+      <!-- Reticle -->
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
       <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
         <div class="relative w-56 h-72 sm:w-64 sm:h-80 max-w-[85%] max-h-[85%] rounded-3xl border border-dashed border-cyan-400/70 flex items-center justify-center">
           <div class="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 rounded-tl-xl border-cyan-400"></div>
@@ -184,7 +196,10 @@ The HOD's new favorite AI!</p>
           <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 rounded-bl-xl border-cyan-400"></div>
           <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 rounded-br-xl border-cyan-400"></div>
           <div class="text-[10px] font-mono tracking-widest text-cyan-200 bg-slate-900/80 px-2.5 py-1 rounded-full border border-cyan-400/40 backdrop-blur">
+<<<<<<< HEAD
             MANUAL SNAP
+=======
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
           </div>
         </div>
       </div>
@@ -201,13 +216,18 @@ The HOD's new favorite AI!</p>
         </div>
         <h3 class="text-sm font-bold text-white">Camera Access Blocked / Inactive</h3>
         <p class="text-xs text-slate-300 max-w-xs leading-relaxed">
+<<<<<<< HEAD
           Please allow camera permission in browser settings to enable face capture.
+=======
+          Please allow camera permission in browser settings, or select a student from the simulator below.
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
         </p>
         <button onclick="requestCameraStart()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-xl font-medium transition">
           Retry Camera Stream
         </button>
       </div>
     </div>
+<<<<<<< HEAD
 
     <!-- Manual Snap & Verify Controls Bar -->
     <div class="w-full flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-3 shadow-sm">
@@ -237,6 +257,22 @@ The HOD's new favorite AI!</p>
         <i class="fa-solid fa-circle-info text-cyan-600 text-sm"></i>
         <span>Ready for snapshot verification. Point camera at student and click <strong>Snap &amp; Verify Face</strong>.</span>
       </div>
+=======
+    <div class="w-full flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2">
+      <div class="flex items-center gap-1" role="group" aria-label="Scanner mode">
+        <button id="btn-scan-auto" type="button" onclick="setScanMode('auto')" class="px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-xs font-semibold">Automatic</button>
+        <button id="btn-scan-snap" type="button" onclick="setScanMode('snap')" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">Snap</button>
+      </div>
+      <button id="btn-snap-scan" type="button" onclick="snapScanFrame()" class="hidden px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5">
+        <i class="fa-solid fa-camera"></i><span>Snap &amp; Scan</span>
+      </button>
+      <p id="scan-capture-status" class="w-full text-[10px] text-slate-500" role="status" aria-live="polite">Automatic mode continuously scans the camera preview; Snap captures a still photo only when pressed.</p>
+      <label class="flex items-center gap-2 text-xs text-slate-600">
+        <i class="fa-solid fa-magnifying-glass-plus"></i><span>Zoom</span>
+        <input id="camera-zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="Camera zoom" class="w-24 accent-cyan-700" disabled>
+        <span id="camera-zoom-value" class="font-mono w-8">1.0x</span>
+      </label>
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
     </div>
     <!-- Multi-Student Roaming Group Queue Tray -->
     <div id="group-tray" class="w-full bg-white border border-rose-200 rounded-2xl p-3 shadow-xl hidden flex-col gap-2.5 transition-all duration-300">

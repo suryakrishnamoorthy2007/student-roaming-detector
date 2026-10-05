@@ -62,7 +62,13 @@ async function requestCameraStart() {
           canvas.height = video.videoHeight || 720;
         }
         configureCameraZoom();
+<<<<<<< HEAD
         attachSnapButtonListener();
+=======
+        if (typeof startContinuousDetectionLoop === 'function') {
+          startContinuousDetectionLoop();
+        }
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
       }).catch(err => console.error("Video play error:", err));
     };
   }
@@ -143,6 +149,7 @@ function setScanMode(mode) {
   clearTimeout(autoScanFlushTimer);
   autoScanFlushTimer = null;
   autoScanCandidates.clear();
+<<<<<<< HEAD
   const autoBtn = document.getElementById('btn-scan-auto');
   if (autoBtn) {
     autoBtn.className = scanMode === 'auto'
@@ -163,6 +170,18 @@ function setScanMode(mode) {
       ? 'Automatic mode continuously scans the camera preview; Snap captures a still photo only when pressed.'
       : 'Snap mode does not capture until you press Snap & Scan.';
   }
+=======
+  document.getElementById('btn-scan-auto').className = scanMode === 'auto'
+    ? 'px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-xs font-semibold'
+    : 'px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold';
+  document.getElementById('btn-scan-snap').className = scanMode === 'snap'
+    ? 'px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-xs font-semibold'
+    : 'px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold';
+  document.getElementById('btn-snap-scan').classList.toggle('hidden', scanMode !== 'snap');
+  document.getElementById('scan-capture-status').innerText = scanMode === 'auto'
+    ? 'Automatic mode continuously scans the camera preview; Snap captures a still photo only when pressed.'
+    : 'Snap mode does not capture until you press Snap & Scan.';
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
   showToast(scanMode === 'auto' ? 'Automatic scanning enabled' : 'Snap mode enabled');
 }
 
@@ -210,6 +229,7 @@ function simulateStudentSelection(regNo) {
 }
 
 /**
+<<<<<<< HEAD
  * Manual "Snap & Verify Face" workflow.
  * Captures the current frame from the camera video stream onto a hidden canvas,
  * converts it to a JPEG blob (quality 0.85), sends via POST FormData to /verify-face,
@@ -442,3 +462,50 @@ if (document.readyState === 'loading') {
 } else {
   attachSnapButtonListener();
 }
+=======
+ * High-performance, non-blocking Python backend streaming.
+ * Checks for valid camera frames, handles concurrency lock, and reports face bounding boxes.
+ */
+async function sendFrameToPythonBackend() {
+  const videoElement = document.getElementById('webcam');
+  if (!videoElement || videoElement.paused || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  if (isSendingBackendFrame) return; // Prevent network bottleneck
+
+  isSendingBackendFrame = true;
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.min(640, videoElement.videoWidth || 640);
+    canvas.height = Math.min(480, videoElement.videoHeight || 480);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.7));
+    if (!blob) return;
+
+    const formData = new FormData();
+    formData.append('file', blob, 'frame.jpg');
+
+    const BACKEND_VERIFY_URL = 'https://roaming-detector-backend.onrender.com/verify-face';
+    const response = await fetch(BACKEND_VERIFY_URL, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      // Optional logging for debugging backend status
+      if (result.status === 'success' && result.faces?.length) {
+        console.debug("Backend detected faces:", result.faces.length);
+      }
+    }
+  } catch (error) {
+    // Backend offline or unreachable; silently continue
+  } finally {
+    isSendingBackendFrame = false;
+  }
+}
+
+// Automatically stream backend snapshot every 3 seconds if active
+setInterval(sendFrameToPythonBackend, 3000);
+>>>>>>> 10bcec3ce5ac1e390fc7495d9f0972c707464dce
