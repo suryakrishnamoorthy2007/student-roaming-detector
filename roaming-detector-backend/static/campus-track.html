@@ -8,9 +8,9 @@
   <meta name="theme-color" content="#082b35">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="CampusTrack">
-  <meta name="description" content="CampusTrack AI Enterprise - Mobile face recognition and class monitoring app">
-  <title>CampusTrack AI Enterprise - Face Recognition & Timetable Monitor</title>
+  <meta name="apple-mobile-web-app-title" content="STUDENT ROAMING DETECTOR">
+  <meta name="description" content="student roaming detector - Mobile face recognition ">
+  <title>STUDENT ROAMING DETECTOR - Face Recognition</title>
   <link rel="manifest" href="manifest.json">
 
   <!-- Tailwind CSS CDN -->
@@ -129,7 +129,7 @@
         <div class="login-focus-frame"></div>
         <div class="login-scan-sweep"></div>
         <div class="engineering-login-copy">
-          <p class="text-[10px] font-mono text-cyan-200/80">CAMPUS TRACK</p>
+          <p class="text-[10px] font-mono text-cyan-200/80"></p>
           <p class="mt-2 text-xl sm:text-xl font-bold tracking-[0.018em] text-white">Skipping class and feeling sly?
             The HOD's new favorite AI!</p>
           <p class="mt-2 text-[11px] font-mono tracking-[0.08em] normal-case text-cyan-100/70">Secure access //
@@ -143,7 +143,7 @@
             class="mx-auto w-12 h-12 rounded-2xl bg-cyan-50 text-cyan-600 flex items-center justify-center text-xl border border-cyan-200">
             <i class="fa-solid fa-user-lock"></i>
           </div>
-          <h2 class="font-bold text-lg text-slate-900 mt-3">CampusTrack User Login</h2>
+          <h2 class="font-bold text-lg text-slate-900 mt-3">student roaming detector User Login</h2>
           <p class="text-xs text-slate-500 mt-1">Use an approved user ID to access the scanner.</p>
         </div>
         <form onsubmit="handleUserLogin(event)" class="space-y-3 text-xs">
@@ -457,9 +457,13 @@
             <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">Class Advisor</span>
             <span id="modal-stu-advisor" class="font-semibold text-slate-800 truncate block">Ms. Shanmugavalli H</span>
           </div>
-          <div class="col-span-2">
+          <div>
             <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">HOD Name</span>
             <span id="modal-stu-hod" class="font-semibold text-slate-800 truncate block">Dr. Kamal N</span>
+          </div>
+          <div>
+            <span class="text-slate-500 block text-[10px] mb-0.5 font-medium">HOD Mobile (Database)</span>
+            <span id="modal-stu-hod-phone" class="font-semibold text-emerald-700 font-mono truncate block">+919876543210</span>
           </div>
         </div>
 
@@ -488,8 +492,8 @@
           </button>
           <button id="btn-modal-alert" onclick="dispatchSingleAlert()"
             class="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-lg flex items-center justify-center gap-1.5 active:scale-95">
-            <i class="fa-solid fa-paper-plane"></i>
-            <span>Save &amp; Alert HOD</span>
+            <i class="fa-solid fa-paper-plane mr-1"></i>
+            <span>Send Alert Message to HOD</span>
           </button>
         </div>
       </div>
@@ -885,6 +889,25 @@
             <option value="serif">Georgia</option>
             <option value="mono">Monospace</option>
           </select></label>
+        <div class="border-t border-slate-200 pt-3 space-y-2">
+          <p class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+            <i class="fa-brands fa-whatsapp text-emerald-600 text-sm"></i>
+            <span>Automated WhatsApp Gateway (Optional)</span>
+          </p>
+          <p class="text-[10px] text-slate-500">For 100% silent background delivery of alert &amp; dual-photo frame, enter UltraMsg credentials:</p>
+          <label class="block text-[11px] font-medium text-slate-600">UltraMsg Instance ID
+            <input id="setting-ultramsg-instance" type="text" placeholder="e.g. instance12345" class="mt-0.5 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-mono">
+          </label>
+          <label class="block text-[11px] font-medium text-slate-600">UltraMsg Token
+            <input id="setting-ultramsg-token" type="password" placeholder="e.g. token_here" class="mt-0.5 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-mono">
+          </label>
+          <label class="block text-[11px] font-medium text-slate-600">Default Fallback HOD Mobile
+            <input id="setting-default-hod-phone" type="tel" placeholder="e.g. +919876543210" class="mt-0.5 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-mono">
+          </label>
+          <button type="button" onclick="saveWhatsAppGatewaySettings()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-1.5 rounded-xl text-xs transition shadow-sm active:scale-95">
+            Save Gateway Settings
+          </button>
+        </div>
         <p class="text-[11px] text-slate-500">Settings are saved on this device.</p>
         <div class="pt-2">
           <button type="button" onclick="closeSettingsModal(); handleUserLogout();"

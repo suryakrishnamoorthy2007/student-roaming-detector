@@ -1,5 +1,10 @@
 import os
 import threading
+import base64
+import urllib.parse
+import urllib.request
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -100,10 +105,97 @@ async def verify_face(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class HODAlertRequest(BaseModel):
+    hodPhone: str
+    hodName: Optional[str] = "HOD"
+    hodEmail: Optional[str] = None
+    studentName: str
+    regNo: str
+    department: Optional[str] = ""
+    year: Optional[int] = 0
+    section: Optional[str] = ""
+    location: Optional[str] = "Campus Grounds"
+    period: Optional[str] = ""
+    timeRange: Optional[str] = ""
+    faculty: Optional[str] = ""
+    incidentId: str
+    message: str
+    masterPhoto: Optional[str] = None
+    livePhoto: Optional[str] = None
+
+
+@app.post("/api/send-alert")
+async def send_hod_alert(payload: HODAlertRequest):
+    try:
+        evidence_dir = os.path.join(STATIC_DIR, "evidence")
+        os.makedirs(evidence_dir, exist_ok=True)
+
+        saved_files = []
+        clean_reg = "".join(c for c in payload.regNo if c.isalnum() or c in ("-", "_")) or "unknown"
+        clean_id = "".join(c for c in payload.incidentId if c.isalnum() or c in ("-", "_")) or "inc"
+
+        # Save live camera snapshot to disk if provided as data URL
+        if payload.livePhoto and payload.livePhoto.startswith("data:"):
+            try:
+                _, b64data = payload.livePhoto.split(",", 1)
+                img_data = base64.b64decode(b64data)
+                live_filename = f"{clean_id}_{clean_reg}_live.jpg"
+                live_path = os.path.join(evidence_dir, live_filename)
+                with open(live_path, "wb") as f:
+                    f.write(img_data)
+                saved_files.append(f"/static/evidence/{live_filename}")
+            except Exception as e:
+                print(f"[Alert] Error saving live photo: {e}")
+
+        # Send via WhatsApp API Gateway if credentials exist (e.g. UltraMsg)
+        ultramsg_instance = os.getenv("ULTRAMSG_INSTANCE_ID")
+        ultramsg_token = os.getenv("ULTRAMSG_TOKEN")
+        if ultramsg_instance and ultramsg_token and payload.hodPhone:
+            try:
+                clean_phone = "".join(c for c in payload.hodPhone if c.isdigit())
+                msg_data = urllib.parse.urlencode({
+                    "token": ultramsg_token,
+                    "to": clean_phone,
+                    "body": payload.message
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"https://api.ultramsg.com/{ultramsg_instance}/messages/chat",
+                    data=msg_data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                urllib.request.urlopen(req, timeout=5)
+
+                if payload.livePhoto:
+                    photo_data = urllib.parse.urlencode({
+                        "token": ultramsg_token,
+                        "to": clean_phone,
+                        "image": payload.livePhoto,
+                        "caption": f"Live Camera Snapshot - {payload.studentName} ({payload.regNo})"
+                    }).encode("utf-8")
+                    req_img = urllib.request.Request(
+                        f"https://api.ultramsg.com/{ultramsg_instance}/messages/image",
+                        data=photo_data,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"}
+                    )
+                    urllib.request.urlopen(req_img, timeout=5)
+            except Exception as e:
+                print(f"[Alert] UltraMsg dispatch error: {e}")
+
+        print(f"[Alert] Direct HOD alert processed successfully for {payload.studentName} ({payload.regNo}) -> HOD Phone: {payload.hodPhone}")
+        return {
+            "status": "success",
+            "message": f"Alert processed for HOD ({payload.hodPhone})",
+            "incidentId": payload.incidentId,
+            "savedEvidence": saved_files
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 def get_app_html():
     """Returns the path to the main application HTML file, checking multiple names for compatibility."""
     if os.path.isdir(STATIC_DIR):
-        for candidate in ["index.html", "campustrack.html", "campus track.html", "campus-track.html"]:
+        for candidate in ["index.html", "campustrack.html", "campus track.html"]:
             p = os.path.join(STATIC_DIR, candidate)
             if os.path.isfile(p):
                 return p
@@ -120,7 +212,6 @@ async def serve_index():
 @app.get("/campustrack.html")
 @app.get("/campus track.html")
 @app.get("/campus%20track.html")
-@app.get("/campus-track.html")
 async def serve_campustrack_pages():
     return FileResponse(get_app_html())
 
@@ -150,3 +241,8 @@ if os.path.isdir(STATIC_DIR):
     if os.path.isdir(js_path):
         app.mount("/js", StaticFiles(directory=js_path), name="js")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n[CampusTrack AI] Server started at http://localhost:8080 (Press Ctrl+C to stop)\n")
+    uvicorn.run(app, host="0.0.0.0", port=8080)
