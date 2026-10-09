@@ -59,32 +59,14 @@ function openSettingsModal() {
   const settings = getAppSettings();
   const themeInput = document.getElementById('setting-theme');
   const fontInput = document.getElementById('setting-font');
-  const instanceInput = document.getElementById('setting-ultramsg-instance');
-  const tokenInput = document.getElementById('setting-ultramsg-token');
-  const defaultPhoneInput = document.getElementById('setting-default-hod-phone');
   if (themeInput) themeInput.value = settings.theme || 'light';
   if (fontInput) fontInput.value = settings.font || 'dm';
-  if (instanceInput) instanceInput.value = settings.ultramsgInstance || '';
-  if (tokenInput) tokenInput.value = settings.ultramsgToken || '';
-  if (defaultPhoneInput) defaultPhoneInput.value = settings.defaultHodPhone || '';
   const signedInUser = getUsers().find(item => item.userId === activeUserId);
   const welcomeEl = document.getElementById('settings-welcome');
   if (welcomeEl) {
     welcomeEl.innerText = signedInUser ? `Welcome, ${signedInUser.name}` : 'Welcome, operator';
   }
   document.getElementById('settings-modal')?.classList.remove('hidden');
-}
-
-function saveWhatsAppGatewaySettings() {
-  const settings = getAppSettings();
-  const instance = document.getElementById('setting-ultramsg-instance')?.value.trim() || '';
-  const token = document.getElementById('setting-ultramsg-token')?.value.trim() || '';
-  const defaultPhone = document.getElementById('setting-default-hod-phone')?.value.trim() || '';
-  settings.ultramsgInstance = instance;
-  settings.ultramsgToken = token;
-  settings.defaultHodPhone = defaultPhone;
-  localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-  showToast('✅ WhatsApp Gateway & HOD settings saved');
 }
 
 function closeSettingsModal() { 
@@ -256,14 +238,15 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 3. Defer heavy network tasks (AI Models + Cloud Sync) to browser idle time
+  // Initialize cloud sync immediately for real-time cloud synchronization
+  if (typeof initializeCloudSync === 'function') {
+    initializeCloudSync();
+  }
+
+  // Defer heavy network tasks (AI Models) to browser idle time
   const deferTask = window.requestIdleCallback || ((cb) => setTimeout(cb, 100));
 
   deferTask(() => {
-    // Initialize cloud sync in background
-    if (typeof initializeCloudSync === 'function') {
-      initializeCloudSync();
-    }
     // Initialize Face-API in background
     if (typeof initAI === 'function') {
       initAI();

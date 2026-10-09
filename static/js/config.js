@@ -92,15 +92,15 @@ let _cachedStudents = null;
 let _cachedTimetables = null;
 
 function getStudents() {
-  if (_cachedStudents) return _cachedStudents;
+  if (_cachedStudents !== null) return _cachedStudents;
   const data = localStorage.getItem(STORAGE_KEY_STUDENTS);
-  if (!data) {
-    localStorage.setItem(STORAGE_KEY_STUDENTS, JSON.stringify(DEFAULT_STUDENTS));
+  if (data === null) {
     _cachedStudents = DEFAULT_STUDENTS;
     return DEFAULT_STUDENTS;
   }
   try {
-    _cachedStudents = JSON.parse(data);
+    const parsed = JSON.parse(data);
+    _cachedStudents = Array.isArray(parsed) ? parsed : DEFAULT_STUDENTS;
     return _cachedStudents;
   } catch (e) {
     _cachedStudents = DEFAULT_STUDENTS;
@@ -109,10 +109,12 @@ function getStudents() {
 }
 
 function saveStudents(list) {
-  _cachedStudents = list;
-  localStorage.setItem(STORAGE_KEY_STUDENTS, JSON.stringify(list));
+  _cachedStudents = Array.isArray(list) ? list : [];
+  localStorage.setItem(STORAGE_KEY_STUDENTS, JSON.stringify(_cachedStudents));
   if (typeof rebuildFaceMatcher === 'function') rebuildFaceMatcher();
   if (typeof updateAdminTimetableTargetOptions === 'function') updateAdminTimetableTargetOptions();
+  if (typeof renderAdminStudentData === 'function') renderAdminStudentData();
+  if (typeof populateTimetableViewerOptions === 'function') populateTimetableViewerOptions();
 }
 
 function getScanHistory() {

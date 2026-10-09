@@ -4,11 +4,63 @@
 
 let cloudDb = null;
 let cloudSyncReady = false;
+let studentsListenerUnsubscribe = null;
 
 function updateCloudStatus(message) {
   const status = document.getElementById('timetable-viewer-status');
   if (status) status.innerText = message;
 }
+
+/**
+ * Attaches real-time cloud listeners so student additions, edits, and deletions
+ * immediately sync across all active devices without requiring manual cache clearing.
+ * Firebase Firestore serves as the single source of truth.
+ */
+function setupStudentRealtimeSync() {
+  if (!cloudSyncReady || !cloudDb) return;
+  if (studentsListenerUnsubscribe) {
+    try { studentsListenerUnsubscribe(); } catch (e) {}
+    studentsListenerUnsubscribe = null;
+  }
+
+  studentsListenerUnsubscribe = cloudDb.collection('students').onSnapshot((snapshot) => {
+    const cloudStudents = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      if (data && data.regNo) {
+        cloudStudents.push(data);
+      }
+    });
+
+    // Directly overwrite memory cache and localStorage, and trigger immediate UI/AI model updates
+    saveStudents(cloudStudents);
+    updateCloudStatus(`Real-time synced (${cloudStudents.length} student${cloudStudents.length === 1 ? '' : 's'})`);
+  }, (err) => {
+    console.warn('Real-time student sync error:', err);
+  });
+}
+
+/**
+ * Explicit helper to refresh student states directly from Cloud Firestore
+ */
+async function refreshStudentsFromCloud() {
+  if (!cloudSyncReady || !cloudDb) return [];
+  try {
+    const snapshot = await cloudDb.collection('students').get();
+    const cloudStudents = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      if (data && data.regNo) cloudStudents.push(data);
+    });
+    saveStudents(cloudStudents);
+    return cloudStudents;
+  } catch (err) {
+    console.warn('Error refreshing students from cloud:', err);
+    return [];
+  }
+}
+window.refreshStudentsFromCloud = refreshStudentsFromCloud;
+window.setupStudentRealtimeSync = setupStudentRealtimeSync;
 
 /**
  * Initializes Firebase asynchronously without blocking mobile UI rendering.
@@ -44,6 +96,9 @@ async function initializeCloudSync() {
     cloudSyncReady = true;
     updateCloudStatus('Cloud sync connected (Google Cloud Firestore)');
 
+    // Start real-time cloud sync listener immediately
+    setupStudentRealtimeSync();
+
     // Fetch cloud data in parallel in the background
     loadCloudData();
   } catch (err) {
@@ -66,13 +121,14 @@ async function loadCloudData() {
       cloudDb.collection('incidents').orderBy('createdAt', 'desc').limit(50).get()
     ]);
 
-    // 1. Process Students
-    if (studentsResult.status === 'fulfilled' && !studentsResult.value.empty) {
+    // 1. Process Students (rely on Firebase as the single source of truth)
+    if (studentsResult.status === 'fulfilled') {
       const cloudStudents = [];
-      studentsResult.value.forEach(doc => cloudStudents.push(doc.data()));
-      if (cloudStudents.length > 0) {
-        saveStudents(cloudStudents);
-      }
+      studentsResult.value.forEach(doc => {
+        const data = doc.data();
+        if (data && data.regNo) cloudStudents.push(data);
+      });
+      saveStudents(cloudStudents);
     }
 
     // 2. Process Timetables
