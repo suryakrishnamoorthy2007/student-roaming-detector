@@ -21,14 +21,6 @@ const FIREBASE_CONFIG = {
   measurementId: 'G-0590Z7YYT1'
 };
 
-function generateSynthetic128DDescriptor(seed) {
-  const vec = new Float32Array(128);
-  for (let i = 0; i < 128; i++) {
-    vec[i] = Math.sin(seed * (i + 1) * 0.45) * 0.2;
-  }
-  return Array.from(vec);
-}
-
 function hasFirebaseConfig() {
   return Object.values(FIREBASE_CONFIG).every(value => Boolean(value));
 }
@@ -45,7 +37,7 @@ const DEFAULT_STUDENTS = [
     hodEmail: "hod.cse@college.edu",
     hodPhone: "+919876543210",
     photoUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=350&h=350&fit=crop&crop=faces",
-    faceDescriptor: generateSynthetic128DDescriptor(1.42)
+    faceDescriptor: null
   },
   {
     regNo: "110324104116",
@@ -58,7 +50,7 @@ const DEFAULT_STUDENTS = [
     hodEmail: "hod.cse@college.edu",
     hodPhone: "+919876543210",
     photoUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=350&h=350&fit=crop&crop=faces",
-    faceDescriptor: generateSynthetic128DDescriptor(2.98)
+    faceDescriptor: null
   }
 ];
 

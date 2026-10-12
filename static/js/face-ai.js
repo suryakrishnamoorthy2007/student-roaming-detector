@@ -110,28 +110,77 @@ async function initAI() {
 /**
  * Rebuilds the facial descriptor matcher from student roster embeddings.
  */
+// Matching is deliberately conservative: a weak/ambiguous match is rejected.
+// face-api.js descriptors are 128-dimensional Float32 vectors; only real enrolled
+// descriptors are accepted. Synthetic/default descriptors must never identify people.
+const FACE_MATCH_MAX_DISTANCE = 0.42;
+const FACE_MATCH_MIN_GAP = 0.055;
+
+function isValidFaceDescriptor(value) {
+  if (!Array.isArray(value) || value.length !== 128 ||
+      !value.every(n => Number.isFinite(Number(n)))) return false;
+
+  // Reject legacy demo vectors created by the old generateSynthetic128DDescriptor()
+  // function, including copies that may still exist in Firebase or localStorage.
+  for (const seed of [1.42, 2.98]) {
+    let matchesLegacyDemo = true;
+    for (let i = 0; i < 128; i++) {
+      const expected = Math.sin(seed * (i + 1) * 0.45) * 0.2;
+      if (Math.abs(Number(value[i]) - expected) > 1e-6) {
+        matchesLegacyDemo = false;
+        break;
+      }
+    }
+    if (matchesLegacyDemo) return false;
+  }
+  return true;
+}
+
 function rebuildFaceMatcher() {
   try {
+    if (!window.faceapi || !faceModelsReady) {
+      faceMatcher = null;
+      return;
+    }
     const students = getStudents();
+    const seen = new Set();
     const labeledDescriptors = [];
     students.forEach(student => {
-      if (student.faceDescriptor && student.faceDescriptor.length === 128) {
-        labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(
-          student.regNo,
-          [new Float32Array(student.faceDescriptor)]
-        ));
-      }
+      const regNo = String(student.regNo || '').trim();
+      if (!regNo || seen.has(regNo) || !isValidFaceDescriptor(student.faceDescriptor)) return;
+      seen.add(regNo);
+      labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(
+        regNo, [new Float32Array(student.faceDescriptor.map(Number))]
+      ));
     });
-
-    if (labeledDescriptors.length > 0) {
-      // 0.52 distance threshold for robust lighting & angles
-      faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.52);
-    } else {
-      faceMatcher = null;
-    }
+    faceMatcher = labeledDescriptors.length
+      ? new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCH_MAX_DISTANCE)
+      : null;
   } catch (e) {
-    console.error("FaceMatcher init error:", e);
+    faceMatcher = null;
+    console.error('FaceMatcher init error:', e);
   }
+}
+
+function findReliableStudentMatch(descriptor, students) {
+  if (!window.faceapi || !isValidFaceDescriptor(Array.from(descriptor || []))) return null;
+  const candidates = (students || []).filter(s =>
+    s && String(s.regNo || '').trim() && isValidFaceDescriptor(s.faceDescriptor)
+  ).map(student => ({
+    student,
+    distance: faceapi.euclideanDistance(
+      new Float32Array(descriptor), new Float32Array(student.faceDescriptor.map(Number))
+    )
+  })).filter(x => Number.isFinite(x.distance)).sort((a, b) => a.distance - b.distance);
+
+  if (!candidates.length) return null;
+  const best = candidates[0];
+  const second = candidates[1];
+  if (best.distance > FACE_MATCH_MAX_DISTANCE) return null;
+  // When multiple enrolled people exist, reject close/ambiguous candidates.
+  if (second && (second.distance - best.distance) < FACE_MATCH_MIN_GAP) return null;
+  return { student: best.student, distance: best.distance,
+    confidence: Math.round(Math.max(0, Math.min(99, (1 - best.distance) * 100))) };
 }
 
 /**
@@ -358,7 +407,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       if (pass1Detections && pass1Detections.length > 0) {
         for (const det of pass1Detections) {
           const best = faceMatcher.findBestMatch(det.descriptor);
-          if (best && best.label !== 'unknown' && (1 - best.distance) >= 0.48) {
+          if (findReliableStudentMatch(det.descriptor, getStudents())) {
             foundEnrolled = true;
             break;
           }
@@ -421,27 +470,26 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           };
         }
 
-        const best = faceMatcher.findBestMatch(det.descriptor);
-        const matchConf = Math.min(99, Math.max(15, Math.round((1 - best.distance) * 100)));
+        // Very small faces have unreliable descriptors. Fail closed instead of guessing.
+        if (box.width < 60 || box.height < 60) continue;
+        const reliableMatch = findReliableStudentMatch(det.descriptor, students);
+        if (reliableMatch) {
+          const student = reliableMatch.student;
+          const matchConf = reliableMatch.confidence;
+          const distance = estimateDistanceMeters(box, origW, origH);
+          const sched = typeof evaluateStudentTimetable === 'function' ? evaluateStudentTimetable(student) : null;
+          const isViolation = sched && sched.type === 'VIOLATION';
 
-        if (best.label !== 'unknown' && matchConf >= 48) {
-          const student = students.find(s => s.regNo === best.label);
-          if (student) {
-            const distance = estimateDistanceMeters(box, origW, origH);
-            const sched = typeof evaluateStudentTimetable === 'function' ? evaluateStudentTimetable(student) : null;
-            const isViolation = sched && sched.type === 'VIOLATION';
-
-            recognizedMatches.push({
-              student,
-              regNo: student.regNo,
-              conf: matchConf,
-              box,
-              distance,
-              isViolation,
-              sched,
-              descriptor: Array.from(det.descriptor)
-            });
-          }
+          recognizedMatches.push({
+            student,
+            regNo: student.regNo,
+            conf: matchConf,
+            box,
+            distance,
+            isViolation,
+            sched,
+            descriptor: Array.from(det.descriptor)
+          });
         }
       }
     }
