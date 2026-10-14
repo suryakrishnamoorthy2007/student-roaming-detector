@@ -4,6 +4,8 @@
 
 let editingStudentRegNo = null;
 let tempSnapEnrollUrl = null;
+let tempEnrollmentPhotoUrls = [];
+let tempEnrollmentPhotoChanged = false;
 
 function openAdminAuthModal() {
   document.getElementById('admin-auth-status').innerText = '';
@@ -111,6 +113,8 @@ function snapCurrentCameraForEnrollment() {
   c.height = video.videoHeight || 720;
   c.getContext('2d').drawImage(video, 0, 0);
   tempSnapEnrollUrl = c.toDataURL('image/jpeg', 0.9);
+  tempEnrollmentPhotoUrls = [tempSnapEnrollUrl];
+  tempEnrollmentPhotoChanged = true;
 
   const img = document.getElementById('s-preview-img');
   img.src = tempSnapEnrollUrl;
@@ -135,6 +139,8 @@ function editStudentDetails(regNo) {
   document.getElementById('s-hod-phone').value = student.hodPhone || '';
 
   tempSnapEnrollUrl = student.photoUrl || null;
+  tempEnrollmentPhotoUrls = tempSnapEnrollUrl ? [tempSnapEnrollUrl] : [];
+  tempEnrollmentPhotoChanged = false;
   const preview = document.getElementById('s-preview-img');
   preview.src = tempSnapEnrollUrl || '';
   preview.classList.toggle('hidden', !tempSnapEnrollUrl);
@@ -164,6 +170,8 @@ async function deleteStudent(regNo) {
 function cancelStudentEdit() {
   editingStudentRegNo = null;
   tempSnapEnrollUrl = null;
+  tempEnrollmentPhotoUrls = [];
+  tempEnrollmentPhotoChanged = false;
   document.getElementById('form-single').reset();
   const preview = document.getElementById('s-preview-img');
   preview.src = '';
@@ -195,23 +203,46 @@ async function handleSingleStudentEnroll(e) {
   const previousStudent = currentList.find(student => student.regNo === editingStudentRegNo);
 
   try {
-    const samePhoto = previousStudent?.photoUrl === tempSnapEnrollUrl;
-    const descriptor = samePhoto && previousStudent.faceDescriptor?.length === 128
-      ? previousStudent.faceDescriptor
-      : await createFaceDescriptor(tempSnapEnrollUrl);
-    if (!descriptor || descriptor.length !== 128) {
-      showToast('No clear face found. Choose a front-facing photo and try again.');
+    const photoUrls = (Array.isArray(tempEnrollmentPhotoUrls) && tempEnrollmentPhotoUrls.length
+      ? tempEnrollmentPhotoUrls
+      : [tempSnapEnrollUrl]).filter(Boolean).slice(0, 3);
+    const samePhoto = Boolean(previousStudent && previousStudent.photoUrl === tempSnapEnrollUrl && !tempEnrollmentPhotoChanged);
+    let descriptors = [];
+
+    // Editing student details without changing the photo should preserve valid templates.
+    if (samePhoto) {
+      const saved = Array.isArray(previousStudent.faceDescriptors) && previousStudent.faceDescriptors.length
+        ? previousStudent.faceDescriptors
+        : [previousStudent.faceDescriptor];
+      descriptors = saved.filter(d => typeof isValidFaceDescriptor === 'function' && isValidFaceDescriptor(d)).slice(0, 3);
+    }
+
+    // Recompute on a changed/re-uploaded photo. Multiple real photos help handle pose and lighting variation.
+    if (!descriptors.length || tempEnrollmentPhotoChanged) {
+      descriptors = [];
+      for (const photoUrl of photoUrls) {
+        try {
+          const descriptor = await createFaceDescriptor(photoUrl);
+          if (descriptor && descriptor.length === 128 &&
+              (typeof isValidFaceDescriptor !== 'function' || isValidFaceDescriptor(descriptor))) {
+            descriptors.push(descriptor);
+          }
+        } catch (photoError) {
+          console.warn('[Enrollment] Could not create descriptor from one selected photo:', photoError);
+        }
+      }
+    }
+
+    if (!descriptors.length) {
+      showToast('No usable face descriptor found. Choose a clear, front-facing photo and try again.');
       return;
     }
 
     const newStudent = {
       regNo, name, department, year, section, advisorName, hodName, hodEmail, hodPhone,
       photoUrl: tempSnapEnrollUrl,
-      faceDescriptor: descriptor,
-      // Preserve older enrolled templates only when editing the same saved photo.
-      faceDescriptors: samePhoto && Array.isArray(previousStudent.faceDescriptors)
-        ? previousStudent.faceDescriptors
-        : [descriptor]
+      faceDescriptor: descriptors[0],
+      faceDescriptors: descriptors.slice(0, 3)
     };
 
     const existingIdx = currentList.findIndex(s => s.regNo === regNo);

@@ -2,7 +2,7 @@
    CampusTrack Service Worker - Cache-First Strategy for Static Assets
    ========================================================================== */
 
-const CACHE_NAME = 'campustrack-cache-v1';
+const CACHE_NAME = 'campustrack-cache-v3';
 const STATIC_ASSETS = [
   './',
   './index.html',

@@ -218,23 +218,42 @@ window.addEventListener('DOMContentLoaded', () => {
   setupMobileAppInstall();
   startLiveHUDClock();
 
-  // Photo file upload change listener for single enrollment
+  // Enrollment accepts up to three real photos of the same student.
+  // Multiple angles/lighting conditions improve matching reliability much more than loosening thresholds.
   const photoInput = document.getElementById('s-photo');
   if (photoInput) {
-    photoInput.addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(evt) {
-        tempSnapEnrollUrl = evt.target.result;
+    photoInput.addEventListener('change', async function(e) {
+      const pickedFiles = Array.from(e.target.files || []);
+      if (!pickedFiles.length) return;
+      const files = pickedFiles.slice(0, 3);
+      if (pickedFiles.length > 3) showToast('Use up to 3 photos per student; the first 3 were selected.');
+      try {
+        const urls = await Promise.all(files.map(file => new Promise((resolve, reject) => {
+          if (!file.type || !file.type.startsWith('image/')) {
+            reject(new Error('Please select image files only.'));
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error('A selected photo could not be read.'));
+          reader.readAsDataURL(file);
+        })));
+        if (!urls.length) return;
+        tempEnrollmentPhotoUrls = urls;
+        tempSnapEnrollUrl = urls[0];
+        tempEnrollmentPhotoChanged = true;
         const img = document.getElementById('s-preview-img');
         if (img) {
           img.src = tempSnapEnrollUrl;
           img.classList.remove('hidden');
         }
         document.getElementById('s-preview-icon')?.classList.add('hidden');
-      };
-      reader.readAsDataURL(file);
+        const help = document.getElementById('s-photo-help');
+        if (help) help.textContent = `${urls.length} photo${urls.length === 1 ? '' : 's'} selected. Use clear photos of the same student.`;
+      } catch (uploadError) {
+        console.error('[Enrollment] Photo upload error:', uploadError);
+        showToast(uploadError.message || 'Could not read selected photos.');
+      }
     });
   }
 

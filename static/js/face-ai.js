@@ -18,6 +18,9 @@ let lastLiveFrameTime = 0;
 
 // Auto-Scan tracking and cooldowns
 let recentAutoScanStudents = new Map();
+// Require repeat evidence before live-mode verification to reduce one-frame mix-ups.
+let liveRecognitionEvidence = new Map();
+let lastFaceMatchFailureReason = 'unknown';
 
 /**
  * Initializes Face-API models with WebGL GPU hardware acceleration.
@@ -113,8 +116,16 @@ async function initAI() {
 // Matching is deliberately conservative: a weak/ambiguous match is rejected.
 // face-api.js descriptors are 128-dimensional Float32 vectors; only real enrolled
 // descriptors are accepted. Synthetic/default descriptors must never identify people.
-const FACE_MATCH_MAX_DISTANCE = 0.48;
-const FACE_MATCH_MIN_GAP = 0.035;
+const FACE_MATCH_MAX_DISTANCE = 0.52;
+// A wider candidate margin is intentional: twins and similar-looking students should
+// fall back to ID/staff verification instead of being guessed from face alone.
+const FACE_MATCH_MIN_GAP = 0.075;
+const MATCH_FAILURE_PRIORITY = { unknown: 0, lowSimilarity: 1, lowQuality: 2, inconsistent: 2, ambiguous: 3 };
+function noteFaceMatchFailure(reason) {
+  if ((MATCH_FAILURE_PRIORITY[reason] || 0) >= (MATCH_FAILURE_PRIORITY[lastFaceMatchFailureReason] || 0)) {
+    lastFaceMatchFailureReason = reason;
+  }
+}
 
 function isValidFaceDescriptor(value) {
   if (!Array.isArray(value) || value.length !== 128 ||
@@ -168,7 +179,10 @@ function rebuildFaceMatcher() {
 }
 
 function findReliableStudentMatch(descriptor, students) {
-  if (!window.faceapi || !isValidFaceDescriptor(Array.from(descriptor || []))) return null;
+  if (!window.faceapi || !isValidFaceDescriptor(Array.from(descriptor || []))) {
+    noteFaceMatchFailure('lowQuality');
+    return null;
+  }
   const probe = new Float32Array(descriptor.map(Number));
   const candidates = (students || []).filter(s => s && String(s.regNo || '').trim())
     .map(student => {
@@ -181,12 +195,23 @@ function findReliableStudentMatch(descriptor, students) {
       return distances.length ? { student, distance: Math.min(...distances) } : null;
     }).filter(Boolean).sort((a, b) => a.distance - b.distance);
 
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    noteFaceMatchFailure('lowQuality');
+    return null;
+  }
   const best = candidates[0];
   const second = candidates[1];
-  if (best.distance > FACE_MATCH_MAX_DISTANCE) return null;
-  // When multiple enrolled people exist, reject close/ambiguous candidates.
-  if (second && (second.distance - best.distance) < FACE_MATCH_MIN_GAP) return null;
+  if (best.distance > FACE_MATCH_MAX_DISTANCE) {
+    noteFaceMatchFailure('lowSimilarity');
+    return null;
+  }
+  // If another enrolled student is also plausible and the margin is narrow,
+  // especially for twins, don't select one merely because it is ranked first.
+  if (second && second.distance <= FACE_MATCH_MAX_DISTANCE + 0.04 &&
+      (second.distance - best.distance) < FACE_MATCH_MIN_GAP) {
+    noteFaceMatchFailure('ambiguous');
+    return null;
+  }
   return { student: best.student, distance: best.distance,
     confidence: Math.round(Math.max(0, Math.min(99, (1 - best.distance) * 100))) };
 }
@@ -347,8 +372,11 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
   if (!inputElement || (!sourceInput && (!videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA))) {
     return { matches: [], error: 'Camera stream inactive' };
   }
-  if (!faceModelsReady || !faceMatcher) {
-    return { matches: [], error: 'AI models initializing' };
+  if (!faceModelsReady) {
+    return { matches: [], error: 'AI models are still initializing. Please try again shortly.' };
+  }
+  if (!faceMatcher) {
+    return { matches: [], error: 'No valid face descriptors are enrolled. Re-enroll the student with a clear face photo.' };
   }
   if (detectionInProgress) {
     return { matches: [], busy: true };
@@ -356,6 +384,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
 
   detectionInProgress = true;
   const startTime = performance.now();
+  lastFaceMatchFailureReason = 'unknown';
 
   try {
     const origW = sourceInput ? (sourceInput.width || 1280) : (video ? (video.videoWidth || 1280) : 1280);
@@ -446,10 +475,41 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           .withFaceDescriptors();
 
         if (pass2Detections && pass2Detections.length > 0) {
-          rawDetections = pass2Detections;
-          detectedFromCrop = true;
+          // Keep full-frame results as well as corridor results. Replacing the first pass
+          // can discard a valid face near the edge of the camera image.
+          const mergedDetections = (pass1Detections || []).slice();
+          for (const cropDet of pass2Detections) {
+            const cropBox = cropDet.detection.box;
+            const fullBox = {
+              x: cropBox.x + cropOffsetX,
+              y: cropBox.y + cropOffsetY,
+              width: cropBox.width,
+              height: cropBox.height
+            };
+            const duplicate = mergedDetections.some(existing => {
+              const b = existing.detection.box;
+              const left = Math.max(b.x, fullBox.x);
+              const top = Math.max(b.y, fullBox.y);
+              const right = Math.min(b.x + b.width, fullBox.x + fullBox.width);
+              const bottom = Math.min(b.y + b.height, fullBox.y + fullBox.height);
+              const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+              const union = b.width * b.height + fullBox.width * fullBox.height - intersection;
+              return union > 0 && intersection / union > 0.30;
+            });
+            if (!duplicate) {
+              cropDet.detection.box = fullBox;
+              mergedDetections.push(cropDet);
+            }
+          }
+          rawDetections = mergedDetections;
+          detectedFromCrop = false;
+          cropOffsetX = 0;
+          cropOffsetY = 0;
         } else {
           rawDetections = pass1Detections || [];
+          detectedFromCrop = false;
+          cropOffsetX = 0;
+          cropOffsetY = 0;
         }
       }
     }
@@ -479,7 +539,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     }
 
     // Measure and report speed in HUD
-    const durationMs = Math.max(12, Math.round(performance.now() - startTime));
+    let durationMs = Math.max(12, Math.round(performance.now() - startTime));
     lastInferenceTimeMs = durationMs;
     const speedPill = document.getElementById('scanner-speed-text');
     if (speedPill) {
@@ -516,6 +576,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
             student,
             regNo: student.regNo,
             conf: matchConf,
+            matchDistance: reliableMatch.distance,
             box,
             distance,
             isViolation,
@@ -524,6 +585,44 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           });
         }
       }
+    }
+
+    // Recognition recovery pass: also run when a face was detected but none matched.
+    // The previous implementation only retried when *no face was detected*, so a poor
+    // descriptor from a blurry frame could never benefit from a better full-frame pass.
+    if (recognizedMatches.length === 0) {
+      try {
+        const retryOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.10 });
+        const retryDetections = await faceapi.detectAllFaces(inputElement, retryOpts)
+          .withFaceLandmarks(useTinyLandmarks)
+          .withFaceDescriptors();
+        for (const det of (retryDetections || [])) {
+          const box = det.detection.box;
+          if (box.width < 60 || box.height < 60) continue;
+          const reliableMatch = findReliableStudentMatch(det.descriptor, students);
+          if (!reliableMatch) continue;
+          const student = reliableMatch.student;
+          const sched = typeof evaluateStudentTimetable === 'function' ? evaluateStudentTimetable(student) : null;
+          recognizedMatches.push({
+            student,
+            regNo: student.regNo,
+            conf: reliableMatch.confidence,
+            matchDistance: reliableMatch.distance,
+            box,
+            distance: estimateDistanceMeters(box, origW, origH),
+            isViolation: Boolean(sched && sched.type === 'VIOLATION'),
+            sched,
+            descriptor: Array.from(det.descriptor)
+          });
+        }
+        if (recognizedMatches.length > 0) console.info('[FaceAI] High-resolution recognition retry succeeded.');
+      } catch (retryError) {
+        console.warn('[FaceAI] High-resolution recognition retry failed:', retryError);
+      }
+      durationMs = Math.max(12, Math.round(performance.now() - startTime));
+      lastInferenceTimeMs = durationMs;
+      const retrySpeedPill = document.getElementById('scanner-speed-text');
+      if (retrySpeedPill) retrySpeedPill.innerText = `⚡ ${durationMs}ms · Recovery scan`;
     }
 
     // --- DRAW BOUNDING BOXES ON OVERLAY ---
@@ -609,6 +708,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
 
     return {
       matches: recognizedMatches,
+      reason: recognizedMatches.length ? null : lastFaceMatchFailureReason,
       durationMs,
       timestamp: Date.now()
     };
@@ -718,7 +818,7 @@ async function handleSnapAndVerify() {
   snapCanvas.height = video.videoHeight || 720;
   const snapCtx = snapCanvas.getContext('2d');
   snapCtx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
-  const liveSnapshotUrl = snapCanvas.toDataURL('image/jpeg', 0.88);
+  let liveSnapshotUrl = snapCanvas.toDataURL('image/jpeg', 0.88);
 
   // 3. Freeze the viewfinder with the captured photo right away
   freezeScannerView(liveSnapshotUrl);
@@ -739,8 +839,8 @@ async function handleSnapAndVerify() {
         <div class="flex items-center gap-2.5">
           <i class="fa-solid fa-circle-notch fa-spin text-cyan-600 text-base shrink-0"></i>
           <div>
-            <p class="font-bold text-slate-800">Photo Snapped · Processing Faces...</p>
-            <p class="text-[11px] text-slate-500">Photo captured instantly. You do not need to keep holding phone toward student.</p>
+            <p class="font-bold text-slate-800">Photo Captured · Checking Face...</p>
+            <p class="text-[11px] text-slate-500">The scanner captures up to 3 quick frames to recover from a blurry frame. Keep the student's face in view briefly.</p>
           </div>
         </div>
         <img src="${liveSnapshotUrl}" class="w-10 h-10 rounded-lg object-cover border border-cyan-300 shadow-sm shrink-0">
@@ -749,8 +849,90 @@ async function handleSnapAndVerify() {
   }
 
   try {
-    // 5. Run AI face detection exclusively on the captured photo frame
-    const scanResult = await executeUltraFastScan(true, snapCanvas);
+    // Capture two additional frames from the live stream. The initial photo is still instant;
+    // the backup frames are only analyzed if the first frame does not produce a reliable match.
+    const scanFrames = [snapCanvas];
+    for (let frameIndex = 1; frameIndex < 3; frameIndex++) {
+      await new Promise(resolve => setTimeout(resolve, 85));
+      if (!videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) break;
+      const backupCanvas = document.createElement('canvas');
+      backupCanvas.width = video.videoWidth || snapCanvas.width;
+      backupCanvas.height = video.videoHeight || snapCanvas.height;
+      const backupContext = backupCanvas.getContext('2d', { alpha: false });
+      if (!backupContext) break;
+      backupContext.drawImage(video, 0, 0, backupCanvas.width, backupCanvas.height);
+      scanFrames.push(backupCanvas);
+    }
+
+    // A live auto-scan may still be finishing when the Snap button is pressed.
+    // Retry brief "busy" responses instead of misreporting them as an unknown student.
+    const scanFrameWithBusyRetry = async (frame) => {
+      let result = { matches: [], busy: true };
+      for (let attempt = 0; attempt < 8; attempt++) {
+        result = await executeUltraFastScan(true, frame);
+        if (!result.busy) return result;
+        await new Promise(resolve => setTimeout(resolve, 60));
+      }
+      return { ...result, busy: true, error: 'Scanner is busy. Please try again.' };
+    };
+
+    const processingStarted = performance.now();
+    let scanResult = { matches: [], error: 'No scan result' };
+    const frameResults = [];
+    let selectedFrameIndex = 0;
+    for (let frameIndex = 0; frameIndex < scanFrames.length; frameIndex++) {
+      const frameResult = await scanFrameWithBusyRetry(scanFrames[frameIndex]);
+      frameResults.push({ frameIndex, result: frameResult });
+      scanResult = frameResult;
+      if (frameResult.error && !frameResult.busy) break;
+    }
+
+    // Confirm a student only when the same registration number is independently matched
+    // in at least two frames. This reduces transient blur/occlusion errors; it does NOT
+    // guarantee that face-only recognition can distinguish identical twins.
+    const votes = new Map();
+    for (const item of frameResults) {
+      const frameIds = new Set();
+      for (const match of (item.result.matches || [])) {
+        const regNo = String(match.regNo || match.student?.regNo || '');
+        if (!regNo || frameIds.has(regNo)) continue;
+        frameIds.add(regNo);
+        let vote = votes.get(regNo);
+        if (!vote) {
+          vote = { frames: new Set(), best: match, bestFrameIndex: item.frameIndex };
+          votes.set(regNo, vote);
+        }
+        vote.frames.add(item.frameIndex);
+        if (match.conf > (vote.best.conf || 0)) {
+          vote.best = match;
+          vote.bestFrameIndex = item.frameIndex;
+        }
+      }
+    }
+    const confirmedVotes = [...votes.values()].filter(vote => vote.frames.size >= 2);
+    if (confirmedVotes.length) {
+      confirmedVotes.sort((a, b) => b.best.conf - a.best.conf);
+      selectedFrameIndex = confirmedVotes[0].bestFrameIndex;
+      scanResult = {
+        ...frameResults.find(item => item.frameIndex === selectedFrameIndex)?.result,
+        matches: confirmedVotes.map(vote => vote.best),
+        reason: null
+      };
+    } else {
+      const reasons = frameResults.map(item => item.result.reason).filter(Boolean);
+      const onlyOneFrameMatched = votes.size > 0;
+      const reason = reasons.includes('ambiguous') ? 'ambiguous' : (onlyOneFrameMatched ? 'inconsistent' : (reasons.includes('lowQuality') ? 'lowQuality' : (reasons.includes('lowSimilarity') ? 'lowSimilarity' : 'unknown')));
+      scanResult = { ...(frameResults[frameResults.length - 1]?.result || scanResult), matches: [], reason };
+    }
+    scanResult.durationMs = Math.max(1, Math.round(performance.now() - processingStarted));
+
+    if (selectedFrameIndex > 0) {
+      liveSnapshotUrl = scanFrames[selectedFrameIndex].toDataURL('image/jpeg', 0.88);
+      freezeScannerView(liveSnapshotUrl);
+      const processingThumb = resultArea?.querySelector('img');
+      if (processingThumb) processingThumb.src = liveSnapshotUrl;
+    }
+
     const matches = scanResult.matches || [];
 
     if (matches.length > 0) {
@@ -838,13 +1020,23 @@ async function handleSnapAndVerify() {
         freezeIndicatorText.innerText = '📸 Photo Analyzed · No match';
       }
       if (resultArea) {
+        const scanProblem = scanResult.error || (scanResult.busy ? 'Scanner is busy. Please try again.' : '');
+        const failureTitle = scanProblem ? 'Scanner Could Not Complete the Match' : (scanResult.reason === 'ambiguous' ? 'Similar Faces — Manual Verification Needed' : 'No Reliable Match');
+        const reasonMessages = {
+          ambiguous: 'Two or more enrolled face profiles are too similar to distinguish reliably (this can happen with twins). Do not guess. Verify using the student ID/QR or an authorized staff member.',
+          inconsistent: 'The identity did not match consistently across camera frames. Ask the student to face the camera, move into good light, uncover the face where practical, and retry. Use student ID/staff verification if it still fails.',
+          lowQuality: 'The face image or saved face profile is not usable. Use a clear, single-person photo and re-enroll with up to 3 current photos.',
+          lowSimilarity: 'The face did not match an enrolled profile closely enough. Blur, face covering, angle, or changed appearance may contribute. Retry with a clear view or verify by student ID/staff.',
+          unknown: `Checked up to ${scanFrames.length} frames in ${scanResult.durationMs || 0}ms, but no enrolled face passed the match checks. Ask the student to face the camera or re-enroll with 2–3 clear photos.`
+        };
+        const failureMessage = scanProblem || reasonMessages[scanResult.reason] || reasonMessages.unknown;
         resultArea.innerHTML = `
           <div class="space-y-2.5 w-full">
             <div class="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800 w-full">
               <i class="fa-solid fa-triangle-exclamation text-amber-600 text-base shrink-0"></i>
               <div>
-                <p class="font-bold text-slate-800">No Enrolled Students Recognized</p>
-                <p class="text-[11px] text-amber-700">Photo captured and processed in ${scanResult.durationMs || 30}ms. No registered student face matched the snapshot.</p>
+                <p class="font-bold text-slate-800">${failureTitle}</p>
+                <p class="text-[11px] text-amber-700">${failureMessage}</p>
               </div>
             </div>
             <button type="button" onclick="unfreezeScannerView()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-xl text-xs transition border border-slate-300 flex items-center justify-center gap-1.5 cursor-pointer">
@@ -854,7 +1046,7 @@ async function handleSnapAndVerify() {
           </div>
         `;
       }
-      showToast('No registered students recognized in photo');
+      showToast(scanResult.error || (scanResult.busy ? 'Scanner is busy. Please try again.' : 'No registered students recognized after retrying frames.'));
     }
   } catch (err) {
     console.error('Snap error:', err);
@@ -892,22 +1084,38 @@ function startLiveAutoScanLoop() {
       lastLiveFrameTime = timestamp;
       const res = await executeUltraFastScan(false);
 
-      if (res && res.matches && res.matches.length > 0) {
-        const now = Date.now();
-        const unseenMatches = res.matches.filter(m => {
-          const lastSeen = recentAutoScanStudents.get(m.regNo) || 0;
-          return now - lastSeen >= 12000;
-        });
-
-        if (unseenMatches.length > 0) {
-          const livePhoto = captureScannerFrame(0.80);
-          unseenMatches.forEach(m => {
-            recentAutoScanStudents.set(m.regNo, now);
-            if (typeof triggerVerification === 'function') {
-              triggerVerification(m.regNo, livePhoto, m.conf);
-            }
-          });
+      const now = Date.now();
+      const seenThisPass = new Set((res && res.matches ? res.matches : []).map(m => String(m.regNo)));
+      // Keep only recent evidence. A one-frame match is not enough to trigger an alert.
+      for (const [regNo, evidence] of liveRecognitionEvidence.entries()) {
+        evidence.times = evidence.times.filter(t => now - t <= 650);
+        if (!evidence.times.length) liveRecognitionEvidence.delete(regNo);
+      }
+      for (const m of (res && res.matches ? res.matches : [])) {
+        const regNo = String(m.regNo);
+        const evidence = liveRecognitionEvidence.get(regNo) || { times: [], best: m };
+        evidence.times.push(now);
+        evidence.times = evidence.times.filter(t => now - t <= 650);
+        if (!evidence.best || m.conf > evidence.best.conf) evidence.best = m;
+        liveRecognitionEvidence.set(regNo, evidence);
+      }
+      const confirmedMatches = [];
+      for (const regNo of seenThisPass) {
+        const evidence = liveRecognitionEvidence.get(regNo);
+        const lastSeen = recentAutoScanStudents.get(regNo) || 0;
+        if (evidence && evidence.times.length >= 2 && now - lastSeen >= 12000) {
+          confirmedMatches.push(evidence.best);
         }
+      }
+      if (confirmedMatches.length > 0) {
+        const livePhoto = captureScannerFrame(0.80);
+        confirmedMatches.forEach(m => {
+          recentAutoScanStudents.set(String(m.regNo), now);
+          liveRecognitionEvidence.delete(String(m.regNo));
+          if (typeof triggerVerification === 'function') {
+            triggerVerification(m.regNo, livePhoto, m.conf);
+          }
+        });
       }
     }
 
@@ -944,19 +1152,24 @@ async function createFaceDescriptor(imageSource) {
   image.src = imageSource;
   await imageLoaded;
 
-  // Enrollment should be more tolerant than live scanning. Try progressively larger
-  // inputs, while still requiring an actual detected face and real descriptor.
+  // Enrollment is tolerant to detector confidence, but never enroll a group image:
+  // with twins or classmates in frame, the largest face might belong to the wrong person.
   for (const config of [
     { inputSize: 320, scoreThreshold: 0.25 },
     { inputSize: 416, scoreThreshold: 0.18 },
     { inputSize: 608, scoreThreshold: 0.10 }
   ]) {
-    const detection = await faceapi.detectSingleFace(
+    const detections = await faceapi.detectAllFaces(
       image, new faceapi.TinyFaceDetectorOptions(config)
-    ).withFaceLandmarks(useTinyLandmarks).withFaceDescriptor();
-    if (detection && isValidFaceDescriptor(Array.from(detection.descriptor))) {
-      return Array.from(detection.descriptor);
+    ).withFaceLandmarks(useTinyLandmarks).withFaceDescriptors();
+    const usable = (detections || []).filter(d => {
+      const b = d.detection && d.detection.box;
+      return b && b.width >= 60 && b.height >= 60 && isValidFaceDescriptor(Array.from(d.descriptor || []));
+    });
+    if (usable.length > 1) {
+      throw new Error('This enrollment photo contains multiple visible faces. Use a photo of only this student.');
     }
+    if (usable.length === 1) return Array.from(usable[0].descriptor);
   }
   return null;
 }

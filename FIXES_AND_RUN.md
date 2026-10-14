@@ -31,3 +31,23 @@ This version improves the enrollment descriptor path and matcher:
 
 ### Important re-enrollment step
 Students who were previously added to the roster without a real face descriptor must be re-enrolled with a clear, front-facing photo. Being present in the student roster alone does not mean the face-recognition model has a descriptor for that student. After updating, restart the app, open the admin/student enrollment screen, edit each affected student, and upload/select their face photo again so the descriptor is regenerated. Test with several consenting students and do not use this for consequential decisions without a manual fallback.
+
+
+## Follow-up fix for occasional false unknowns
+- Snap & Verify now captures up to three short-spaced camera frames and retries only after a miss; a busy response from the live scanner is retried instead of being displayed as an unknown student.
+- Enrollment supports up to three actual photos per student. Use clear, separate front/slight-left/slight-right photos of the same student. The matcher compares live descriptors against all valid saved templates.
+- Matching distance is now 0.52 with an ambiguity gap of 0.055. This modestly reduces false rejects while retaining an ambiguity check. It must be tested against your own consenting student samples; no single threshold guarantees correct identity for every camera.
+- Re-uploading a photo deliberately regenerates the descriptor, even if the same image is selected again. Existing students without valid descriptors should be re-enrolled.
+- The snap retry helps motion blur from a single frame. It cannot restore detail from a heavily blurred, dark, distant, or occluded face; improve lighting and move the camera closer where practical.
+
+- Service-worker cache version was bumped so the browser is less likely to keep serving the older face-matching JavaScript. After launching this ZIP, refresh the page once; if it still looks unchanged, close the tab and reopen the app.
+
+
+## Twin, face-covering, and appearance-change safeguards (v3)
+- The matcher now rejects ambiguous top candidates with a wider distance margin. This can reduce mix-ups but may mean more `Unknown` results.
+- The Snap & Verify workflow analyses all available frames and only confirms a registration number seen in at least two frames. Live auto-scan also requires repeated evidence before triggering verification.
+- Enrollment photo processing rejects images with more than one detected face, preventing an arbitrary face from being selected from a group photo.
+- For a student who is now bald or has changed appearance, re-enroll with up to three clear photos of that same student in their current appearance (front, slight left, slight right). Keep the full face visible where practical. A prior photo with hair can be kept as an additional genuine photo only if desired, but current photos should be included.
+- A partly covered face has less identifying information. The scanner may return Unknown or ambiguous and should not guess. Ask for a clear view where practical; otherwise verify with student ID/QR or authorized staff.
+- Identical twins cannot be reliably distinguished by face-only matching in every case. If the best candidates are close, the app rejects the match; use a separate credential (ID/QR/RFID) or staff verification for twin cases. Do not lower thresholds to force a name.
+- These are risk-reduction measures, not a guarantee of correct identity. Test with consenting students in the real camera/lighting setup. Do not issue disciplinary actions from a face match alone.
