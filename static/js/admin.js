@@ -207,7 +207,11 @@ async function handleSingleStudentEnroll(e) {
     const newStudent = {
       regNo, name, department, year, section, advisorName, hodName, hodEmail, hodPhone,
       photoUrl: tempSnapEnrollUrl,
-      faceDescriptor: descriptor
+      faceDescriptor: descriptor,
+      // Preserve older enrolled templates only when editing the same saved photo.
+      faceDescriptors: samePhoto && Array.isArray(previousStudent.faceDescriptors)
+        ? previousStudent.faceDescriptors
+        : [descriptor]
     };
 
     const existingIdx = currentList.findIndex(s => s.regNo === regNo);
@@ -354,6 +358,7 @@ async function processBulkZip() {
       }
       targetStudent.photoUrl = dataUrl;
       targetStudent.faceDescriptor = descriptor;
+      targetStudent.faceDescriptors = [descriptor];
       changedStudents.push(targetStudent);
     }
 

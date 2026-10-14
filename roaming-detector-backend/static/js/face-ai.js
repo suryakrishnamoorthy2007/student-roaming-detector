@@ -113,8 +113,8 @@ async function initAI() {
 // Matching is deliberately conservative: a weak/ambiguous match is rejected.
 // face-api.js descriptors are 128-dimensional Float32 vectors; only real enrolled
 // descriptors are accepted. Synthetic/default descriptors must never identify people.
-const FACE_MATCH_MAX_DISTANCE = 0.42;
-const FACE_MATCH_MIN_GAP = 0.055;
+const FACE_MATCH_MAX_DISTANCE = 0.48;
+const FACE_MATCH_MIN_GAP = 0.035;
 
 function isValidFaceDescriptor(value) {
   if (!Array.isArray(value) || value.length !== 128 ||
@@ -147,11 +147,16 @@ function rebuildFaceMatcher() {
     const labeledDescriptors = [];
     students.forEach(student => {
       const regNo = String(student.regNo || '').trim();
-      if (!regNo || seen.has(regNo) || !isValidFaceDescriptor(student.faceDescriptor)) return;
+      if (!regNo || seen.has(regNo)) return;
+      // Accept the current single-template format and the newer multi-template format.
+      const rawTemplates = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
+        ? student.faceDescriptors
+        : [student.faceDescriptor];
+      const templates = rawTemplates.filter(isValidFaceDescriptor)
+        .map(d => new Float32Array(d.map(Number)));
+      if (!templates.length) return;
       seen.add(regNo);
-      labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(
-        regNo, [new Float32Array(student.faceDescriptor.map(Number))]
-      ));
+      labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(regNo, templates));
     });
     faceMatcher = labeledDescriptors.length
       ? new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCH_MAX_DISTANCE)
@@ -164,14 +169,17 @@ function rebuildFaceMatcher() {
 
 function findReliableStudentMatch(descriptor, students) {
   if (!window.faceapi || !isValidFaceDescriptor(Array.from(descriptor || []))) return null;
-  const candidates = (students || []).filter(s =>
-    s && String(s.regNo || '').trim() && isValidFaceDescriptor(s.faceDescriptor)
-  ).map(student => ({
-    student,
-    distance: faceapi.euclideanDistance(
-      new Float32Array(descriptor), new Float32Array(student.faceDescriptor.map(Number))
-    )
-  })).filter(x => Number.isFinite(x.distance)).sort((a, b) => a.distance - b.distance);
+  const probe = new Float32Array(descriptor.map(Number));
+  const candidates = (students || []).filter(s => s && String(s.regNo || '').trim())
+    .map(student => {
+      const rawTemplates = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
+        ? student.faceDescriptors
+        : [student.faceDescriptor];
+      const distances = rawTemplates.filter(isValidFaceDescriptor).map(template =>
+        faceapi.euclideanDistance(probe, new Float32Array(template.map(Number)))
+      ).filter(Number.isFinite);
+      return distances.length ? { student, distance: Math.min(...distances) } : null;
+    }).filter(Boolean).sort((a, b) => a.distance - b.distance);
 
   if (!candidates.length) return null;
   const best = candidates[0];
@@ -443,6 +451,30 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
         } else {
           rawDetections = pass1Detections || [];
         }
+      }
+    }
+
+    // Recovery pass: only runs when the normal pass finds no face.
+    // A larger detector input and lower threshold can recover small/soft faces;
+    // this is still the same pretrained ML model, not a guarantee for heavily blurred images.
+    if (!rawDetections || rawDetections.length === 0) {
+      try {
+        const recoveryOpts = new faceapi.TinyFaceDetectorOptions({
+          inputSize: 608,
+          scoreThreshold: 0.10
+        });
+        const recoveryDetections = await faceapi.detectAllFaces(inputElement, recoveryOpts)
+          .withFaceLandmarks(useTinyLandmarks)
+          .withFaceDescriptors();
+        if (recoveryDetections && recoveryDetections.length > 0) {
+          rawDetections = recoveryDetections;
+          detectedFromCrop = false;
+          cropOffsetX = 0;
+          cropOffsetY = 0;
+          console.info('[FaceAI] Recovery pass detected face(s).');
+        }
+      } catch (recoveryError) {
+        console.warn('[FaceAI] Recovery pass failed:', recoveryError);
       }
     }
 
@@ -912,12 +944,21 @@ async function createFaceDescriptor(imageSource) {
   image.src = imageSource;
   await imageLoaded;
 
-  const detection = await faceapi.detectSingleFace(
-    image,
-    new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 })
-  ).withFaceLandmarks(useTinyLandmarks).withFaceDescriptor();
-
-  return detection ? Array.from(detection.descriptor) : null;
+  // Enrollment should be more tolerant than live scanning. Try progressively larger
+  // inputs, while still requiring an actual detected face and real descriptor.
+  for (const config of [
+    { inputSize: 320, scoreThreshold: 0.25 },
+    { inputSize: 416, scoreThreshold: 0.18 },
+    { inputSize: 608, scoreThreshold: 0.10 }
+  ]) {
+    const detection = await faceapi.detectSingleFace(
+      image, new faceapi.TinyFaceDetectorOptions(config)
+    ).withFaceLandmarks(useTinyLandmarks).withFaceDescriptor();
+    if (detection && isValidFaceDescriptor(Array.from(detection.descriptor))) {
+      return Array.from(detection.descriptor);
+    }
+  }
+  return null;
 }
 
 /**

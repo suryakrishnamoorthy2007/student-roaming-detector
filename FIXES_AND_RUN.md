@@ -20,3 +20,14 @@ The sample records now have `faceDescriptor: null`. This is intentional. Enroll 
 
 ## Limitations
 This is a conservative code-level correction, not a guarantee of perfect recognition. The project still uses browser-side face-api.js embeddings for roster matching; the Python InsightFace endpoint detects faces but does not perform identity matching. Do not automatically send disciplinary alerts solely from a face match—require staff confirmation. Firebase security rules, consent, and enrollment quality must also be reviewed before real-world deployment.
+
+## Face recognition matching and enrollment update
+
+This version improves the enrollment descriptor path and matcher:
+- Enrollment now tries detector input sizes 320, 416, and 608 with progressively more tolerant detection thresholds.
+- Matching accepts both legacy `faceDescriptor` data and the optional `faceDescriptors` array, comparing against all valid templates and using the closest distance per student.
+- The match distance and ambiguity gap are modestly relaxed to reduce false unknowns, while ambiguous matches are still rejected.
+- Both frontend copies (`static/js/` and `roaming-detector-backend/static/js/`) are updated.
+
+### Important re-enrollment step
+Students who were previously added to the roster without a real face descriptor must be re-enrolled with a clear, front-facing photo. Being present in the student roster alone does not mean the face-recognition model has a descriptor for that student. After updating, restart the app, open the admin/student enrollment screen, edit each affected student, and upload/select their face photo again so the descriptor is regenerated. Test with several consenting students and do not use this for consequential decisions without a manual fallback.
