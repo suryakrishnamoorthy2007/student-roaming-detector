@@ -3,6 +3,7 @@
    ========================================================================== */
 
 let faceMatcher = null;
+let faceTemplateIndex = [];
 let faceModelsReady = false;
 let useTinyLandmarks = true;
 let isDetectionPaused = false;
@@ -14,7 +15,11 @@ let scanWorkflow = 'snap';     // 'snap' | 'live'
 let currentZoomLevel = 1.0;
 let lastInferenceTimeMs = 0;
 let liveScanAnimFrame = null;
-let lastLiveFrameTime = 0;
+let nextLiveScanAllowedAt = 0;
+let lastLiveRecoveryAt = 0;
+// Live mode uses one light pass for most frames and performs a higher-resolution
+// recovery occasionally. Manual Snap mode keeps the more thorough recovery flow.
+const LIVE_RECOVERY_INTERVAL_MS = 700;
 
 // Auto-Scan tracking and cooldowns
 let recentAutoScanStudents = new Map();
@@ -128,8 +133,12 @@ function noteFaceMatchFailure(reason) {
 }
 
 function isValidFaceDescriptor(value) {
-  if (!Array.isArray(value) || value.length !== 128 ||
-      !value.every(n => Number.isFinite(Number(n)))) return false;
+  // Accept JSON arrays and Float32Array embeddings without allocating an extra
+  // Array.from copy on every live camera frame.
+  if (!value || typeof value.length !== 'number' || value.length !== 128) return false;
+  for (let i = 0; i < 128; i++) {
+    if (!Number.isFinite(Number(value[i]))) return false;
+  }
 
   // Reject legacy demo vectors created by the old generateSynthetic128DDescriptor()
   // function, including copies that may still exist in Firebase or localStorage.
@@ -151,69 +160,99 @@ function rebuildFaceMatcher() {
   try {
     if (!window.faceapi || !faceModelsReady) {
       faceMatcher = null;
+      faceTemplateIndex = [];
       return;
     }
     const students = getStudents();
     const seen = new Set();
     const labeledDescriptors = [];
+    const compiledTemplates = [];
     students.forEach(student => {
       const regNo = String(student.regNo || '').trim();
       if (!regNo || seen.has(regNo)) return;
-      // Accept the current single-template format and the newer multi-template format.
+      // Support current multi-photo profiles and older single-photo profiles.
       const rawTemplates = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
         ? student.faceDescriptors
         : [student.faceDescriptor];
       const templates = rawTemplates.filter(isValidFaceDescriptor)
-        .map(d => new Float32Array(d.map(Number)));
+        .map(d => Float32Array.from(d, Number));
       if (!templates.length) return;
       seen.add(regNo);
       labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(regNo, templates));
+      // Convert stored arrays to typed vectors once, not during every camera frame.
+      for (const descriptor of templates) {
+        compiledTemplates.push({ regNo, student, descriptor });
+      }
     });
+    faceTemplateIndex = compiledTemplates;
     faceMatcher = labeledDescriptors.length
       ? new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCH_MAX_DISTANCE)
       : null;
   } catch (e) {
     faceMatcher = null;
+    faceTemplateIndex = [];
     console.error('FaceMatcher init error:', e);
   }
 }
 
-function findReliableStudentMatch(descriptor, students) {
-  if (!window.faceapi || !isValidFaceDescriptor(Array.from(descriptor || []))) {
-    noteFaceMatchFailure('lowQuality');
-    return null;
-  }
-  const probe = new Float32Array(descriptor.map(Number));
-  const candidates = (students || []).filter(s => s && String(s.regNo || '').trim())
-    .map(student => {
-      const rawTemplates = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
-        ? student.faceDescriptors
-        : [student.faceDescriptor];
-      const distances = rawTemplates.filter(isValidFaceDescriptor).map(template =>
-        faceapi.euclideanDistance(probe, new Float32Array(template.map(Number)))
-      ).filter(Number.isFinite);
-      return distances.length ? { student, distance: Math.min(...distances) } : null;
-    }).filter(Boolean).sort((a, b) => a.distance - b.distance);
+// A cached, flat template index avoids rebuilding Float32Arrays for every face/frame.
 
-  if (!candidates.length) {
+function findReliableStudentMatch(descriptor, students) {
+  if (!window.faceapi || !isValidFaceDescriptor(descriptor)) {
     noteFaceMatchFailure('lowQuality');
     return null;
   }
-  const best = candidates[0];
-  const second = candidates[1];
+  if (!faceTemplateIndex.length) {
+    noteFaceMatchFailure('lowQuality');
+    return null;
+  }
+
+  const probe = descriptor instanceof Float32Array
+    ? descriptor
+    : Float32Array.from(descriptor, Number);
+  // Keep only the best template distance per distinct student. Multiple photos of
+  // one student must not make that same student appear to be the runner-up.
+  const bestByStudent = new Map();
+  for (const template of faceTemplateIndex) {
+    const distance = faceapi.euclideanDistance(probe, template.descriptor);
+    if (!Number.isFinite(distance)) continue;
+    const previous = bestByStudent.get(template.regNo);
+    if (!previous || distance < previous.distance) {
+      bestByStudent.set(template.regNo, {
+        student: template.student,
+        distance
+      });
+    }
+  }
+  let best = null;
+  let second = null;
+  for (const candidate of bestByStudent.values()) {
+    if (!best || candidate.distance < best.distance) {
+      second = best;
+      best = candidate;
+    } else if (!second || candidate.distance < second.distance) {
+      second = candidate;
+    }
+  }
+  if (!best) {
+    noteFaceMatchFailure('lowQuality');
+    return null;
+  }
   if (best.distance > FACE_MATCH_MAX_DISTANCE) {
     noteFaceMatchFailure('lowSimilarity');
     return null;
   }
-  // If another enrolled student is also plausible and the margin is narrow,
-  // especially for twins, don't select one merely because it is ranked first.
+  // Reject close top candidates instead of risking a twin/similar-face mix-up.
   if (second && second.distance <= FACE_MATCH_MAX_DISTANCE + 0.04 &&
       (second.distance - best.distance) < FACE_MATCH_MIN_GAP) {
     noteFaceMatchFailure('ambiguous');
     return null;
   }
-  return { student: best.student, distance: best.distance,
-    confidence: Math.round(Math.max(0, Math.min(99, (1 - best.distance) * 100))) };
+  return {
+    student: best.student,
+    distance: best.distance,
+    confidence: Math.round(Math.max(0, Math.min(99, (1 - best.distance) * 100)))
+  };
 }
 
 /**
@@ -282,6 +321,8 @@ function setDistanceMode(mode) {
  */
 function setScanWorkflow(workflow) {
   scanWorkflow = workflow;
+  nextLiveScanAllowedAt = 0;
+  lastLiveRecoveryAt = 0;
 
   const btnLive = document.getElementById('btn-workflow-live');
   const btnSnap = document.getElementById('btn-workflow-snap');
@@ -385,6 +426,11 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
   detectionInProgress = true;
   const startTime = performance.now();
   lastFaceMatchFailureReason = 'unknown';
+  const liveFastMode = scanWorkflow === 'live' && !manualSnap && !sourceInput;
+  const recoveryDueAtStart = !liveFastMode || (performance.now() - lastLiveRecoveryAt >= LIVE_RECOVERY_INTERVAL_MS);
+  let recoveryRanThisScan = false;
+  const precomputedMatches = new WeakMap();
+  const students = getStudents();
 
   try {
     const origW = sourceInput ? (sourceInput.width || 1280) : (video ? (video.videoWidth || 1280) : 1280);
@@ -402,8 +448,11 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
 
     // --- PIPELINE BRANCHING BASED ON DISTANCE MODE ---
     if (scanDistanceMode === 'near') {
-      // 1. SHORT RANGE (0.5m - 3m): Ultra-fast 320px tensor (~20ms)
-      const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.28 });
+      // 1. SHORT RANGE: lighter 256px input during live scanning, full 320px for Snap.
+      const detectorOpts = new faceapi.TinyFaceDetectorOptions({
+        inputSize: liveFastMode ? 256 : 320,
+        scoreThreshold: liveFastMode ? 0.25 : 0.28
+      });
       rawDetections = await faceapi.detectAllFaces(inputElement, detectorOpts)
         .withFaceLandmarks(useTinyLandmarks)
         .withFaceDescriptors();
@@ -424,7 +473,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       const cropCtx = cropCanvas.getContext('2d');
       cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
 
-      const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.16 });
+      const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: liveFastMode ? 384 : 512, scoreThreshold: 0.16 });
       rawDetections = await faceapi.detectAllFaces(cropCanvas, detectorOpts)
         .withFaceLandmarks(useTinyLandmarks)
         .withFaceDescriptors();
@@ -432,84 +481,92 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       detectedFromCrop = true;
 
     } else {
-      // 3. AUTO RANGE (SMART PROGRESSIVE HIERARCHICAL):
-      // Pass 1: Fast Near/Mid pass (320px)
-      const fastOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.25 });
+      // AUTO RANGE: live preview uses a quick 256px pass. Expensive crop recovery is
+      // rate-limited; Snap mode still runs the full progressive pipeline.
+      const fastOpts = new faceapi.TinyFaceDetectorOptions({
+        inputSize: liveFastMode ? 256 : 320,
+        scoreThreshold: liveFastMode ? 0.22 : 0.25
+      });
       const pass1Detections = await faceapi.detectAllFaces(inputElement, fastOpts)
         .withFaceLandmarks(useTinyLandmarks)
         .withFaceDescriptors();
 
-      // Check if Pass 1 detected any enrolled student
       let foundEnrolled = false;
-      if (pass1Detections && pass1Detections.length > 0) {
-        for (const det of pass1Detections) {
-          const best = faceMatcher.findBestMatch(det.descriptor);
-          if (findReliableStudentMatch(det.descriptor, getStudents())) {
-            foundEnrolled = true;
-            break;
-          }
-        }
+      for (const det of (pass1Detections || [])) {
+        const match = findReliableStudentMatch(det.descriptor, students);
+        precomputedMatches.set(det, match);
+        if (match) foundEnrolled = true;
       }
 
       if (foundEnrolled) {
-        rawDetections = pass1Detections;
+        rawDetections = pass1Detections || [];
       } else {
-        // Pass 2: Distant Corridor Sensitivity Pass
-        const cropW = Math.round(origW * 0.65);
-        const cropH = Math.round(origH * 0.70);
-        cropOffsetX = Math.round((origW - cropW) / 2);
-        cropOffsetY = Math.round((origH - cropH) / 2);
+        const runSecondaryPass = !liveFastMode || recoveryDueAtStart;
+        if (runSecondaryPass) {
+          const cropW = Math.round(origW * 0.65);
+          const cropH = Math.round(origH * 0.70);
+          cropOffsetX = Math.round((origW - cropW) / 2);
+          cropOffsetY = Math.round((origH - cropH) / 2);
 
-        if (!window._corridorCropCanvas) {
-          window._corridorCropCanvas = document.createElement('canvas');
-        }
-        const cropCanvas = window._corridorCropCanvas;
-        cropCanvas.width = cropW;
-        cropCanvas.height = cropH;
-        const cropCtx = cropCanvas.getContext('2d');
-        cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
-
-        const farOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.16 });
-        const pass2Detections = await faceapi.detectAllFaces(cropCanvas, farOpts)
-          .withFaceLandmarks(useTinyLandmarks)
-          .withFaceDescriptors();
-
-        if (pass2Detections && pass2Detections.length > 0) {
-          // Keep full-frame results as well as corridor results. Replacing the first pass
-          // can discard a valid face near the edge of the camera image.
-          const mergedDetections = (pass1Detections || []).slice();
-          for (const cropDet of pass2Detections) {
-            const cropBox = cropDet.detection.box;
-            const fullBox = {
-              x: cropBox.x + cropOffsetX,
-              y: cropBox.y + cropOffsetY,
-              width: cropBox.width,
-              height: cropBox.height
-            };
-            const duplicate = mergedDetections.some(existing => {
-              const b = existing.detection.box;
-              const left = Math.max(b.x, fullBox.x);
-              const top = Math.max(b.y, fullBox.y);
-              const right = Math.min(b.x + b.width, fullBox.x + fullBox.width);
-              const bottom = Math.min(b.y + b.height, fullBox.y + fullBox.height);
-              const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
-              const union = b.width * b.height + fullBox.width * fullBox.height - intersection;
-              return union > 0 && intersection / union > 0.30;
-            });
-            if (!duplicate) {
-              cropDet.detection.box = fullBox;
-              mergedDetections.push(cropDet);
-            }
+          if (!window._corridorCropCanvas) {
+            window._corridorCropCanvas = document.createElement('canvas');
           }
-          rawDetections = mergedDetections;
-          detectedFromCrop = false;
-          cropOffsetX = 0;
-          cropOffsetY = 0;
+          const cropCanvas = window._corridorCropCanvas;
+          cropCanvas.width = cropW;
+          cropCanvas.height = cropH;
+          const cropCtx = cropCanvas.getContext('2d');
+          cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
+
+          const farOpts = new faceapi.TinyFaceDetectorOptions({
+            inputSize: liveFastMode ? 416 : 512,
+            scoreThreshold: 0.16
+          });
+          const pass2Detections = await faceapi.detectAllFaces(cropCanvas, farOpts)
+            .withFaceLandmarks(useTinyLandmarks)
+            .withFaceDescriptors();
+          if (liveFastMode) {
+            recoveryRanThisScan = true;
+            lastLiveRecoveryAt = performance.now();
+          }
+
+          if (pass2Detections && pass2Detections.length > 0) {
+            const mergedDetections = (pass1Detections || []).slice();
+            for (const cropDet of pass2Detections) {
+              const cropBox = cropDet.detection.box;
+              const fullBox = {
+                x: cropBox.x + cropOffsetX,
+                y: cropBox.y + cropOffsetY,
+                width: cropBox.width,
+                height: cropBox.height
+              };
+              const duplicate = mergedDetections.some(existing => {
+                const b = existing.detection.box;
+                const left = Math.max(b.x, fullBox.x);
+                const top = Math.max(b.y, fullBox.y);
+                const right = Math.min(b.x + b.width, fullBox.x + fullBox.width);
+                const bottom = Math.min(b.y + b.height, fullBox.y + fullBox.height);
+                const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+                const union = b.width * b.height + fullBox.width * fullBox.height - intersection;
+                return union > 0 && intersection / union > 0.30;
+              });
+              if (!duplicate) {
+                cropDet.detection.box = fullBox;
+                mergedDetections.push(cropDet);
+              }
+            }
+            rawDetections = mergedDetections;
+            detectedFromCrop = false;
+            cropOffsetX = 0;
+            cropOffsetY = 0;
+          } else {
+            rawDetections = pass1Detections || [];
+            detectedFromCrop = false;
+            cropOffsetX = 0;
+            cropOffsetY = 0;
+          }
         } else {
+          // Use this frame's fast detections; another frame will run recovery soon.
           rawDetections = pass1Detections || [];
-          detectedFromCrop = false;
-          cropOffsetX = 0;
-          cropOffsetY = 0;
         }
       }
     }
@@ -517,15 +574,21 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     // Recovery pass: only runs when the normal pass finds no face.
     // A larger detector input and lower threshold can recover small/soft faces;
     // this is still the same pretrained ML model, not a guarantee for heavily blurred images.
-    if (!rawDetections || rawDetections.length === 0) {
+    const canRunEmptyFrameRecovery = !liveFastMode ||
+      (!recoveryRanThisScan && performance.now() - lastLiveRecoveryAt >= LIVE_RECOVERY_INTERVAL_MS);
+    if ((!rawDetections || rawDetections.length === 0) && canRunEmptyFrameRecovery) {
       try {
         const recoveryOpts = new faceapi.TinyFaceDetectorOptions({
-          inputSize: 608,
+          inputSize: liveFastMode ? 512 : 608,
           scoreThreshold: 0.10
         });
         const recoveryDetections = await faceapi.detectAllFaces(inputElement, recoveryOpts)
           .withFaceLandmarks(useTinyLandmarks)
           .withFaceDescriptors();
+        if (liveFastMode) {
+          recoveryRanThisScan = true;
+          lastLiveRecoveryAt = performance.now();
+        }
         if (recoveryDetections && recoveryDetections.length > 0) {
           rawDetections = recoveryDetections;
           detectedFromCrop = false;
@@ -546,8 +609,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       speedPill.innerText = `⚡ ${durationMs}ms · Ultra-Fast`;
     }
 
-    // Match faces against enrolled student database
-    const students = getStudents();
+    // Match faces against the precompiled enrolled-student descriptor index.
     const recognizedMatches = [];
 
     if (rawDetections && rawDetections.length > 0) {
@@ -564,7 +626,9 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
 
         // Very small faces have unreliable descriptors. Fail closed instead of guessing.
         if (box.width < 60 || box.height < 60) continue;
-        const reliableMatch = findReliableStudentMatch(det.descriptor, students);
+        const reliableMatch = precomputedMatches.has(det)
+          ? precomputedMatches.get(det)
+          : findReliableStudentMatch(det.descriptor, students);
         if (reliableMatch) {
           const student = reliableMatch.student;
           const matchConf = reliableMatch.confidence;
@@ -590,12 +654,21 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     // Recognition recovery pass: also run when a face was detected but none matched.
     // The previous implementation only retried when *no face was detected*, so a poor
     // descriptor from a blurry frame could never benefit from a better full-frame pass.
-    if (recognizedMatches.length === 0) {
+    const canRunMismatchRecovery = !liveFastMode ||
+      (!recoveryRanThisScan && performance.now() - lastLiveRecoveryAt >= LIVE_RECOVERY_INTERVAL_MS);
+    if (recognizedMatches.length === 0 && canRunMismatchRecovery) {
       try {
-        const retryOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.10 });
+        const retryOpts = new faceapi.TinyFaceDetectorOptions({
+          inputSize: liveFastMode ? 512 : 608,
+          scoreThreshold: 0.10
+        });
         const retryDetections = await faceapi.detectAllFaces(inputElement, retryOpts)
           .withFaceLandmarks(useTinyLandmarks)
           .withFaceDescriptors();
+        if (liveFastMode) {
+          recoveryRanThisScan = true;
+          lastLiveRecoveryAt = performance.now();
+        }
         for (const det of (retryDetections || [])) {
           const box = det.detection.box;
           if (box.width < 60 || box.height < 60) continue;
@@ -1077,25 +1150,26 @@ function startLiveAutoScanLoop() {
       return;
     }
 
-    // Adaptive throttle: Near=70ms (~14 FPS), Far=130ms (~8 FPS), Auto=90ms (~11 FPS)
-    const throttleMs = scanDistanceMode === 'near' ? 70 : (scanDistanceMode === 'far' ? 130 : 90);
+    // A short post-inference cooldown prevents saturating the browser/GPU.
+    // Heavy recovery runs are rate-limited separately in executeUltraFastScan().
+    const cooldownMs = scanDistanceMode === 'near' ? 35 : (scanDistanceMode === 'far' ? 75 : 50);
 
-    if (timestamp - lastLiveFrameTime >= throttleMs && !detectionInProgress) {
-      lastLiveFrameTime = timestamp;
+    if (timestamp >= nextLiveScanAllowedAt && !detectionInProgress) {
       const res = await executeUltraFastScan(false);
+      nextLiveScanAllowedAt = performance.now() + cooldownMs;
 
       const now = Date.now();
       const seenThisPass = new Set((res && res.matches ? res.matches : []).map(m => String(m.regNo)));
       // Keep only recent evidence. A one-frame match is not enough to trigger an alert.
       for (const [regNo, evidence] of liveRecognitionEvidence.entries()) {
-        evidence.times = evidence.times.filter(t => now - t <= 650);
+        evidence.times = evidence.times.filter(t => now - t <= 1800);
         if (!evidence.times.length) liveRecognitionEvidence.delete(regNo);
       }
       for (const m of (res && res.matches ? res.matches : [])) {
         const regNo = String(m.regNo);
         const evidence = liveRecognitionEvidence.get(regNo) || { times: [], best: m };
         evidence.times.push(now);
-        evidence.times = evidence.times.filter(t => now - t <= 650);
+        evidence.times = evidence.times.filter(t => now - t <= 1800);
         if (!evidence.best || m.conf > evidence.best.conf) evidence.best = m;
         liveRecognitionEvidence.set(regNo, evidence);
       }

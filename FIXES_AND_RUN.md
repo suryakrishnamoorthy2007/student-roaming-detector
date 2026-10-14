@@ -51,3 +51,6 @@ Students who were previously added to the roster without a real face descriptor 
 - A partly covered face has less identifying information. The scanner may return Unknown or ambiguous and should not guess. Ask for a clear view where practical; otherwise verify with student ID/QR or authorized staff.
 - Identical twins cannot be reliably distinguished by face-only matching in every case. If the best candidates are close, the app rejects the match; use a separate credential (ID/QR/RFID) or staff verification for twin cases. Do not lower thresholds to force a name.
 - These are risk-reduction measures, not a guarantee of correct identity. Test with consenting students in the real camera/lighting setup. Do not issue disciplinary actions from a face match alone.
+
+## Latest real-time performance update (v4)
+See [`REALTIME_PERFORMANCE_FIX.md`](REALTIME_PERFORMANCE_FIX.md) for the live-scanning optimization details. Live Auto mode now uses a lighter common pass, throttles high-resolution recovery, caches enrolled descriptor vectors, and keeps repeat evidence long enough for slower devices. The full recovery path remains available in Snap mode. Test both near and far mode on your own camera; a browser-side code change cannot guarantee a specific latency on every device.
