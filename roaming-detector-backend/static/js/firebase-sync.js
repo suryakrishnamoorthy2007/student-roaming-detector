@@ -5,6 +5,41 @@
 let cloudDb = null;
 let cloudSyncReady = false;
 let studentsListenerUnsubscribe = null;
+let initialStudentSnapshotHandled = false;
+let seedingInitialStudents = false;
+
+/**
+ * Handle the first cloud roster safely. An empty brand-new Firestore collection must
+ * not erase an existing local roster; seed it once. Later empty snapshots are applied
+ * normally, so a deliberate delete-all on another device can still synchronize.
+ */
+function applyCloudStudentRoster(cloudStudents) {
+  const safeCloudStudents = Array.isArray(cloudStudents) ? cloudStudents : [];
+  if (safeCloudStudents.length === 0 && seedingInitialStudents) {
+    return getStudents();
+  }
+
+  if (!initialStudentSnapshotHandled) {
+    initialStudentSnapshotHandled = true;
+    if (safeCloudStudents.length === 0) {
+      // Do not upload built-in sample/demo records on a clean browser. Only seed data
+      // that had already been explicitly saved in this browser's local roster.
+      const hasSavedLocalRoster = Boolean(localStorage.getItem(STORAGE_KEY_STUDENTS));
+      const localStudents = hasSavedLocalRoster ? getStudents().slice() : [];
+      if (localStudents.length > 0) {
+        seedingInitialStudents = true;
+        updateCloudStatus(`Uploading ${localStudents.length} saved local student record${localStudents.length === 1 ? '' : 's'} to the empty cloud roster...`);
+        Promise.all(localStudents.map(student => saveStudentToCloud(student)))
+          .catch(error => console.warn('[Firebase] Initial roster seed failed:', error))
+          .finally(() => { seedingInitialStudents = false; });
+        return localStudents;
+      }
+    }
+  }
+
+  saveStudents(safeCloudStudents);
+  return safeCloudStudents;
+}
 
 function updateCloudStatus(message) {
   const status = document.getElementById('timetable-viewer-status');
@@ -32,9 +67,10 @@ function setupStudentRealtimeSync() {
       }
     });
 
-    // Directly overwrite memory cache and localStorage, and trigger immediate UI/AI model updates
-    saveStudents(cloudStudents);
-    updateCloudStatus(`Real-time synced (${cloudStudents.length} student${cloudStudents.length === 1 ? '' : 's'})`);
+    // First empty snapshot is handled specially so local records are not discarded
+    // before this new Firebase project has been seeded.
+    const appliedRoster = applyCloudStudentRoster(cloudStudents);
+    updateCloudStatus(`Real-time synced (${appliedRoster.length} student${appliedRoster.length === 1 ? '' : 's'})`);
   }, (err) => {
     console.warn('Real-time student sync error:', err);
   });
@@ -52,8 +88,7 @@ async function refreshStudentsFromCloud() {
       const data = doc.data();
       if (data && data.regNo) cloudStudents.push(data);
     });
-    saveStudents(cloudStudents);
-    return cloudStudents;
+    return applyCloudStudentRoster(cloudStudents);
   } catch (err) {
     console.warn('Error refreshing students from cloud:', err);
     return [];
@@ -78,11 +113,10 @@ async function initializeCloudSync() {
     }
 
     const auth = firebase.auth();
-    // Non-blocking anonymous authentication
+    // Finish anonymous sign-in before attaching Firestore listeners/writes. Starting the
+    // listener before auth completed could produce permission errors on stricter rules.
     if (!auth.currentUser) {
-      auth.signInAnonymously().catch(authErr => {
-        console.warn('Anonymous auth note:', authErr.message);
-      });
+      await auth.signInAnonymously();
     }
 
     cloudDb = firebase.firestore();
@@ -128,7 +162,7 @@ async function loadCloudData() {
         const data = doc.data();
         if (data && data.regNo) cloudStudents.push(data);
       });
-      saveStudents(cloudStudents);
+      applyCloudStudentRoster(cloudStudents);
     }
 
     // 2. Process Timetables
@@ -178,15 +212,71 @@ async function loadCloudData() {
   }
 }
 
-async function saveStudentToCloud(student) {
-  if (!cloudSyncReady || !cloudDb) return;
+async function compressStudentPhotoForCloud(dataUrl, maxDimension = 640) {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
   try {
-    await cloudDb.collection('students').doc(student.regNo).set({
+    return await new Promise(resolve => {
+      const image = new Image();
+      image.onload = () => {
+        try {
+          const sourceWidth = image.naturalWidth || image.width;
+          const sourceHeight = image.naturalHeight || image.height;
+          if (!sourceWidth || !sourceHeight) return resolve(dataUrl);
+          const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+          canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+          const context = canvas.getContext('2d', { alpha: false });
+          if (!context) return resolve(dataUrl);
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.78));
+        } catch (error) {
+          console.warn('[Firebase] Photo compression failed; using original image data:', error);
+          resolve(dataUrl);
+        }
+      };
+      image.onerror = () => resolve(dataUrl);
+      image.src = dataUrl;
+    });
+  } catch (error) {
+    console.warn('[Firebase] Photo compression error:', error);
+    return dataUrl;
+  }
+}
+
+async function saveStudentToCloud(student) {
+  if (!cloudSyncReady || !cloudDb || !student || !student.regNo) return false;
+  try {
+    let cloudPhotoUrl = student.photoUrl || '';
+    if (typeof cloudPhotoUrl === 'string' && cloudPhotoUrl.startsWith('data:image/')) {
+      // Compress large phone images so Firestore stays under its 1 MiB document limit.
+      const compressedPhoto = await compressStudentPhotoForCloud(cloudPhotoUrl);
+      let uploadedPhotoUrl = '';
+      // Prefer Firebase Storage for image blobs; if Storage rules are not configured,
+      // the compressed data URL remains a small Firestore-compatible fallback.
+      try {
+        if (firebase.storage) {
+          const mimeType = /^data:(image\/[^;,]+)/i.exec(compressedPhoto)?.[1] || 'image/jpeg';
+          const safeRegNo = encodeURIComponent(String(student.regNo).trim());
+          const photoRef = firebase.storage().ref().child(`student-photos/${safeRegNo}/profile.jpg`);
+          const uploadResult = await photoRef.putString(compressedPhoto, 'data_url', { contentType: mimeType });
+          uploadedPhotoUrl = await uploadResult.ref.getDownloadURL();
+        }
+      } catch (storageError) {
+        console.warn('[Firebase] Storage upload failed; using a compressed photo in the student document:', storageError);
+      }
+      cloudPhotoUrl = uploadedPhotoUrl || compressedPhoto;
+    }
+
+    await cloudDb.collection('students').doc(String(student.regNo)).set({
       ...student,
+      photoUrl: cloudPhotoUrl,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    return true;
   } catch (e) {
     console.error('Failed to sync student to cloud:', e);
+    return false;
   }
 }
 

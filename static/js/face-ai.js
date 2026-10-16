@@ -42,55 +42,63 @@ async function initAI() {
   try {
     if (label) label.innerText = 'Accelerating GPU...';
 
-    // Enable WebGL GPU acceleration flags for ultra-fast tensor operations
+    // Prefer WebGL, but fall back to CPU if this browser/GPU cannot initialize it.
     if (window.faceapi.tf) {
+      let backendReady = false;
       try {
         await faceapi.tf.setBackend('webgl');
-        faceapi.tf.env().set('WEBGL_PACK', true);
-        faceapi.tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
-        console.log('[FaceAI] WebGL acceleration active:', faceapi.tf.getBackend());
+        await faceapi.tf.ready();
+        backendReady = faceapi.tf.getBackend() === 'webgl';
       } catch (e) {
-        console.warn('[FaceAI] WebGL config note:', e);
+        console.warn('[FaceAI] WebGL backend unavailable; trying CPU:', e);
       }
+      if (!backendReady) {
+        try {
+          await faceapi.tf.setBackend('cpu');
+          await faceapi.tf.ready();
+          backendReady = faceapi.tf.getBackend() === 'cpu';
+        } catch (e) {
+          console.warn('[FaceAI] CPU backend initialization note:', e);
+        }
+      }
+      if (backendReady) console.log('[FaceAI] TensorFlow backend:', faceapi.tf.getBackend());
     }
 
     if (label) label.innerText = 'Loading scan models...';
 
-    // Model URLs: verified high-speed CDNs with manifests
+    // All three model types are required: detector, descriptor network, and eye/face landmarks.
+    // Do not mark AI ready when landmark loading silently failed; that caused chained
+    // .withFaceLandmarks() calls to fail later during scanning.
     const modelUrls = [
       MODEL_URL,
       'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights',
       'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'
-    ];
+    ].filter(Boolean);
 
     let loaded = false;
-    for (const url of modelUrls) {
+    const failures = [];
+    for (const url of [...new Set(modelUrls)]) {
       try {
-        let tinyLandmarksLoaded = false;
-        const tinyLandmarksPromise = faceapi.nets.faceLandmark68TinyNet.loadFromUri(url)
-          .then(() => { tinyLandmarksLoaded = true; })
-          .catch(() => {});
-
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(url),
-          faceapi.nets.faceRecognitionNet.loadFromUri(url),
-          tinyLandmarksPromise
-        ]);
-
-        if (tinyLandmarksLoaded) {
+        await faceapi.nets.tinyFaceDetector.loadFromUri(url);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(url);
+        try {
+          await faceapi.nets.faceLandmark68TinyNet.loadFromUri(url);
           useTinyLandmarks = true;
-        } else {
-          await faceapi.nets.faceLandmark68Net.loadFromUri(url).catch(() => {});
+        } catch (tinyError) {
+          // The full landmark model is a valid fallback but costs a little more time.
+          await faceapi.nets.faceLandmark68Net.loadFromUri(url);
           useTinyLandmarks = false;
         }
         loaded = true;
+        console.info('[FaceAI] Models loaded from:', url, '| tiny landmarks:', useTinyLandmarks);
         break;
       } catch (e) {
-        console.warn('Model source fallback:', url);
+        failures.push(`${url}: ${e?.message || e}`);
+        console.warn('[FaceAI] Model source fallback:', url, e);
       }
     }
 
-    if (!loaded) throw new Error('Could not load AI models');
+    if (!loaded) throw new Error(`Could not load detector, recognition and landmark models. ${failures.join(' | ')}`);
 
     faceModelsReady = true;
     if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
@@ -401,6 +409,133 @@ function handleZoomSlider(val) {
 }
 
 /**
+ * Draws detected face boxes and the two eye-region landmark contours.
+ * This uses the landmarks already produced by face-api.js, so it does not run a
+ * second eye model or add another neural-network inference to every scan.
+ */
+function getFaceLandmarkPoints(detection, accessorName, offsetX = 0, offsetY = 0) {
+  try {
+    const landmarks = detection && detection.landmarks;
+    if (!landmarks || typeof landmarks[accessorName] !== 'function') return [];
+    const points = landmarks[accessorName]();
+    if (!Array.isArray(points)) return [];
+    return points.map(point => ({
+      x: Number(point.x) + offsetX,
+      y: Number(point.y) + offsetY
+    })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  } catch (error) {
+    return [];
+  }
+}
+
+function drawEyeLandmarkRegion(ctx, points, lineColor = '#22d3ee') {
+  if (!ctx || !Array.isArray(points) || points.length < 4) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const point of points) {
+    minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
+  }
+  const eyeWidth = maxX - minX;
+  const eyeHeight = maxY - minY;
+  if (eyeWidth < 3 || eyeHeight < 1) return;
+
+  ctx.save();
+  ctx.strokeStyle = lineColor;
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.10)';
+  ctx.lineWidth = Math.max(1.5, ctx.canvas.width / 900);
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // A small center reticle marks the eye region's geometric center. It is not
+  // a claim that the iris/pupil has been separately segmented.
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const radius = Math.max(2.5, Math.min(5, eyeHeight * 0.42));
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - radius - 2, cy); ctx.lineTo(cx + radius + 2, cy);
+  ctx.moveTo(cx, cy - radius - 2); ctx.lineTo(cx, cy + radius + 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawDetectedFacesAndEyes(ctx, detections, fallbackOffsetX = 0, fallbackOffsetY = 0, recognizedMatches = []) {
+  if (!ctx || !Array.isArray(detections)) return;
+  detections.forEach(det => {
+    const rawBox = det && det.detection && det.detection.box;
+    if (!rawBox) return;
+
+    const hasGlobalBox = det._campusTrackBoxIsGlobal === true;
+    const boxOffsetX = hasGlobalBox ? 0 : fallbackOffsetX;
+    const boxOffsetY = hasGlobalBox ? 0 : fallbackOffsetY;
+    const box = {
+      x: Number(rawBox.x) + boxOffsetX,
+      y: Number(rawBox.y) + boxOffsetY,
+      width: Number(rawBox.width),
+      height: Number(rawBox.height)
+    };
+    if (![box.x, box.y, box.width, box.height].every(Number.isFinite)) return;
+
+    const landmarkOffsetX = Number.isFinite(det._campusTrackLandmarkOffsetX)
+      ? det._campusTrackLandmarkOffsetX : fallbackOffsetX;
+    const landmarkOffsetY = Number.isFinite(det._campusTrackLandmarkOffsetY)
+      ? det._campusTrackLandmarkOffsetY : fallbackOffsetY;
+
+    const recognized = recognizedMatches.some(match => {
+      if (!match || !match.box) return false;
+      const m = match.box;
+      const dx = Math.abs(m.x - box.x), dy = Math.abs(m.y - box.y);
+      return dx < Math.max(8, box.width * 0.10) && dy < Math.max(8, box.height * 0.10);
+    });
+
+    ctx.save();
+    ctx.strokeStyle = recognized ? '#22c55e' : '#22d3ee';
+    ctx.lineWidth = Math.max(1.5, ctx.canvas.width / 900);
+    ctx.setLineDash(recognized ? [] : [7, 5]);
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.setLineDash([]);
+
+    // Face outline along the jaw landmarks (face box above also covers forehead).
+    const jaw = getFaceLandmarkPoints(det, 'getJawOutline', landmarkOffsetX, landmarkOffsetY);
+    if (jaw.length >= 5) {
+      ctx.beginPath();
+      ctx.moveTo(jaw[0].x, jaw[0].y);
+      for (let i = 1; i < jaw.length; i++) ctx.lineTo(jaw[i].x, jaw[i].y);
+      ctx.strokeStyle = recognized ? 'rgba(34,197,94,0.85)' : 'rgba(34,211,238,0.85)';
+      ctx.lineWidth = Math.max(1.2, ctx.canvas.width / 1100);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // face-api's 68-point landmark model includes six points around each eye.
+    const leftEyePoints = getFaceLandmarkPoints(det, 'getLeftEye', landmarkOffsetX, landmarkOffsetY);
+    const rightEyePoints = getFaceLandmarkPoints(det, 'getRightEye', landmarkOffsetX, landmarkOffsetY);
+    drawEyeLandmarkRegion(ctx, leftEyePoints);
+    drawEyeLandmarkRegion(ctx, rightEyePoints);
+
+    if (!recognized) {
+      const eyesDetected = leftEyePoints.length >= 4 && rightEyePoints.length >= 4;
+      const label = eyesDetected ? 'FACE + EYES DETECTED · NOT VERIFIED' : 'FACE DETECTED · EYE LANDMARKS UNAVAILABLE';
+      ctx.save();
+      ctx.font = `bold ${Math.max(10, Math.min(13, ctx.canvas.width / 95))}px sans-serif`;
+      const labelWidth = ctx.measureText(label).width + 12;
+      const labelY = Math.max(0, box.y - 23);
+      ctx.fillStyle = 'rgba(8, 47, 73, 0.92)';
+      ctx.fillRect(box.x, labelY, labelWidth, 20);
+      ctx.fillStyle = '#a5f3fc';
+      ctx.fillText(label, box.x + 6, labelY + 14);
+      ctx.restore();
+    }
+  });
+}
+
+/**
  * Core Ultra-Fast Multi-Distance Neural Scanning Engine.
  * Executes detection without main-thread blocking or redundant conversions.
  */
@@ -416,9 +551,8 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
   if (!faceModelsReady) {
     return { matches: [], error: 'AI models are still initializing. Please try again shortly.' };
   }
-  if (!faceMatcher) {
-    return { matches: [], error: 'No valid face descriptors are enrolled. Re-enroll the student with a clear face photo.' };
-  }
+  // Face and eye detection still runs if no student embeddings are enrolled.
+  // In that case the overlay reports detection only and does not guess an identity.
   if (detectionInProgress) {
     return { matches: [], busy: true };
   }
@@ -551,6 +685,9 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
               });
               if (!duplicate) {
                 cropDet.detection.box = fullBox;
+                cropDet._campusTrackBoxIsGlobal = true;
+                cropDet._campusTrackLandmarkOffsetX = cropOffsetX;
+                cropDet._campusTrackLandmarkOffsetY = cropOffsetY;
                 mergedDetections.push(cropDet);
               }
             }
@@ -702,6 +839,16 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     if (canvas) {
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Show the detected face and both eye regions regardless of whether identity
+      // matching succeeded. This reuses landmarks from the same inference pass.
+      drawDetectedFacesAndEyes(
+        ctx,
+        rawDetections || [],
+        detectedFromCrop ? cropOffsetX : 0,
+        detectedFromCrop ? cropOffsetY : 0,
+        recognizedMatches
+      );
 
       if (recognizedMatches.length > 0) {
         recognizedMatches.forEach(m => {
@@ -1260,58 +1407,66 @@ async function handleQuickEnrollCurrentFace() {
     return showToast('AI models are still initializing, please wait a moment...');
   }
 
-  showToast('Extracting facial embedding from camera frame...');
-
+  showToast('Checking that exactly one face is visible...');
   try {
     const hiddenCanvas = document.createElement('canvas');
-    const width = Math.min(640, video.videoWidth || 640);
-    const height = Math.round(width * (video.videoHeight / video.videoWidth || 0.75));
+    const width = Math.min(960, video.videoWidth || 640);
+    const height = Math.round(width * ((video.videoHeight || 480) / (video.videoWidth || 640)));
     hiddenCanvas.width = width;
     hiddenCanvas.height = height;
-    hiddenCanvas.getContext('2d').drawImage(video, 0, 0, width, height);
-
-    const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 });
-    const detection = await faceapi.detectSingleFace(hiddenCanvas, detectorOptions)
-      .withFaceLandmarks(useTinyLandmarks)
-      .withFaceDescriptor();
-
-    if (!detection) {
-      return showToast('No face detected. Look directly into the camera and try again.');
+    const context = hiddenCanvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('Could not prepare the camera image.');
+    context.drawImage(video, 0, 0, width, height);
+    const photoUrl = hiddenCanvas.toDataURL('image/jpeg', 0.9);
+    const descriptor = await createFaceDescriptor(photoUrl);
+    if (!descriptor) {
+      return showToast('No clear face found. Face the camera in good lighting and retry.');
     }
 
-    const photoUrl = hiddenCanvas.toDataURL('image/jpeg', 0.85);
     window._lastCapturedFace = {
-      descriptor: Array.from(detection.descriptor),
+      descriptor,
       photoUrl,
-      scorePct: Math.round(detection.detection.score * 100)
+      scorePct: null
     };
-
-    enrollCapturedFaceAsDemoStudent('110324104105');
+    // Ask explicitly which existing student this new face sample belongs to.
+    // Never silently assign a live face to the demo registration number.
+    const regNo = window.prompt('Enter the register number of the student whose face you are adding:');
+    if (!regNo || !regNo.trim()) return showToast('Face capture cancelled; no student record was changed.');
+    await enrollCapturedFaceAsDemoStudent(regNo.trim());
   } catch (err) {
     console.error('Quick enroll error:', err);
-    showToast('Failed to enroll face: ' + err.message);
+    showToast('Failed to enroll face: ' + (err.message || 'unknown error'));
   }
 }
 
-function enrollCapturedFaceAsDemoStudent(regNo = '110324104105') {
-  if (!window._lastCapturedFace || !window._lastCapturedFace.descriptor) {
-    return showToast('Please snap a photo containing a face first');
+async function enrollCapturedFaceAsDemoStudent(regNo) {
+  if (!window._lastCapturedFace || !isValidFaceDescriptor(window._lastCapturedFace.descriptor)) {
+    return showToast('Capture a valid face first before enrolling.');
   }
+  const cleanRegNo = String(regNo || '').trim();
+  if (!cleanRegNo) return showToast('Enter the student register number.');
 
   const students = getStudents();
-  const student = students.find(s => s.regNo === regNo);
+  const student = students.find(s => String(s.regNo || '').trim() === cleanRegNo);
   if (!student) {
-    return showToast(`Student ${regNo} not found`);
+    return showToast(`Student ${cleanRegNo} was not found. Add the student from Admin first.`);
+  }
+  if (!window.confirm(`Add this face sample to ${student.name} (${student.regNo})? Make sure the person is the correct student.`)) {
+    return showToast('Face enrollment cancelled.');
   }
 
-  student.faceDescriptor = window._lastCapturedFace.descriptor;
-  student.photoUrl = window._lastCapturedFace.photoUrl;
+  const existing = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
+    ? student.faceDescriptors.filter(isValidFaceDescriptor)
+    : [student.faceDescriptor].filter(isValidFaceDescriptor);
+  const nextDescriptors = [...existing, Array.from(window._lastCapturedFace.descriptor)].slice(-3);
+  student.faceDescriptors = nextDescriptors;
+  student.faceDescriptor = nextDescriptors[nextDescriptors.length - 1];
+  student.photoUrl = window._lastCapturedFace.photoUrl || student.photoUrl;
 
   saveStudents(students);
   rebuildFaceMatcher();
-
-  showToast(`Face enrolled successfully for ${student.name} (${student.regNo})!`);
-  triggerVerification(student.regNo, student.photoUrl, 98);
+  if (typeof saveStudentToCloud === 'function') await saveStudentToCloud(student);
+  showToast(`Face profile updated for ${student.name} (${student.regNo}). Perform a fresh scan to verify.`);
 }
 
 // Explicit window bindings

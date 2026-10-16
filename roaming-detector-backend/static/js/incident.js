@@ -33,7 +33,7 @@ function playCue(type) {
       else if (type === 'alert') synth.triggerAttackRelease(["D4", "G3"], "8n");
       else if (type === 'snap') synth.triggerAttackRelease(["C5", "E5"], "32n");
     }
-  } catch (e) {}
+  } catch (e) { }
 }
 
 function createIncidentStudent(student, livePhoto, confidence) {
@@ -110,7 +110,6 @@ function triggerVerification(regNo, livePhoto, confidence) {
   document.getElementById('modal-enrolled-photo').src = student.photoUrl;
   document.getElementById('modal-live-photo').src = livePhoto;
 
-  // Pre-cache evidence photos in memory immediately so dispatch is instantaneous
   if (typeof preCacheEvidenceFiles === 'function') {
     preCacheEvidenceFiles(student, livePhoto);
   }
@@ -252,31 +251,21 @@ function dispatchGroupAlert() {
   clearIncidentGroup();
 }
 
-// --- DUAL EVIDENCE COMPOSITE FRAME GENERATOR (MASTER + LIVE IN SAME FRAME) ---
+// --- LIGHTNING-FAST SAFE IMAGE LOADER WITH TIMEOUT ---
 
 async function loadImageSafe(src) {
   if (!src) return null;
-  return new Promise(async (resolve) => {
+  return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = async () => {
-      try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error('Fetch failed');
-        const blob = await res.blob();
-        const objUrl = URL.createObjectURL(blob);
-        const retryImg = new Image();
-        retryImg.onload = () => {
-          URL.revokeObjectURL(objUrl);
-          resolve(retryImg);
-        };
-        retryImg.onerror = () => resolve(null);
-        retryImg.src = objUrl;
-      } catch (e) {
-        console.warn('Could not load image for canvas frame:', e);
-        resolve(null);
-      }
+    const timer = setTimeout(() => resolve(null), 2500); // 2.5s fallback timeout so it never freezes
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve(img);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(null);
     };
     img.src = src;
   });
@@ -311,23 +300,19 @@ function drawCoverImage(ctx, img, x, y, w, h) {
 }
 
 function drawPhotoBox(ctx, x, y, width, height, img, label, headerColor, headerBg) {
-  // Box Background
   ctx.fillStyle = '#020617';
   ctx.fillRect(x, y, width, height);
 
-  // Border
   ctx.lineWidth = 2;
   ctx.strokeStyle = headerColor;
   ctx.strokeRect(x, y, width, height);
 
-  // Top Badge Header
   ctx.fillStyle = headerBg;
   ctx.fillRect(x, y, width, 34);
   ctx.fillStyle = headerColor;
   ctx.font = 'bold 12px monospace';
   ctx.fillText(label, x + 12, y + 22);
 
-  // Draw Photo
   const photoY = y + 34;
   const photoHeight = height - 34;
   drawCoverImage(ctx, img, x + 2, photoY + 2, width - 4, photoHeight - 4);
@@ -339,16 +324,13 @@ async function createCompositeEvidenceFrame(student, masterPhotoUrl, livePhotoUr
   canvas.height = 680;
   const ctx = canvas.getContext('2d');
 
-  // Background
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Outer border
   ctx.lineWidth = 4;
   ctx.strokeStyle = '#e11d48';
   ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
 
-  // Top Header Banner
   const headerGrad = ctx.createLinearGradient(0, 0, canvas.width, 0);
   headerGrad.addColorStop(0, '#be123c');
   headerGrad.addColorStop(1, '#881337');
@@ -365,24 +347,18 @@ async function createCompositeEvidenceFrame(student, masterPhotoUrl, livePhotoUr
   const location = student.location || 'Campus Grounds';
   ctx.fillText(`INCIDENT ID: #${incidentId}  |  TIME: ${timestamp}  |  LOCATION: ${location}`, 28, 66);
 
-  // Load photos concurrently
   const [masterImg, liveImg] = await Promise.all([
     loadImageSafe(masterPhotoUrl),
     loadImageSafe(livePhotoUrl)
   ]);
 
-  // Photo coordinates in the same frame
   const boxY = 100;
   const boxWidth = 460;
   const boxHeight = 360;
 
-  // 1. Left Box: Master Photo
   drawPhotoBox(ctx, 28, boxY, boxWidth, boxHeight, masterImg, '📌 ENROLLED MASTER PHOTO (Database)', '#38bdf8', '#0c4a6e');
-
-  // 2. Right Box: Live Camera Snapshot
   drawPhotoBox(ctx, 512, boxY, boxWidth, boxHeight, liveImg, '📸 LIVE CAMERA SNAPSHOT (Caught in Field)', '#f87171', '#450a0a');
 
-  // Bottom Info Card in Same Frame
   const infoY = 480;
   const infoHeight = 175;
   ctx.fillStyle = '#1e293b';
@@ -391,7 +367,6 @@ async function createCompositeEvidenceFrame(student, masterPhotoUrl, livePhotoUr
   ctx.strokeStyle = '#334155';
   ctx.strokeRect(28, infoY, canvas.width - 56, infoHeight);
 
-  // Student Details
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 18px Arial, sans-serif';
   ctx.fillText(`${student.name} (${student.regNo})`, 48, infoY + 34);
@@ -400,14 +375,12 @@ async function createCompositeEvidenceFrame(student, masterPhotoUrl, livePhotoUr
   ctx.font = '14px Arial, sans-serif';
   ctx.fillText(`Class: ${student.department} - Year ${student.year} (${student.section})   |   Advisor: ${student.advisorName || 'Not assigned'}`, 48, infoY + 62);
 
-  // HOD Details
   const hodName = student.hodName || 'HOD';
   const hodPhone = student.hodPhone || 'Not assigned';
   ctx.fillStyle = '#38bdf8';
   ctx.font = 'bold 14px Arial, sans-serif';
   ctx.fillText(`Recipient HOD: ${hodName}   |   HOD Mobile: ${hodPhone}`, 48, infoY + 90);
 
-  // Violation box
   const violBoxY = infoY + 104;
   ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
   ctx.fillRect(44, violBoxY, canvas.width - 88, 54);
@@ -432,7 +405,7 @@ async function preCacheEvidenceFiles(student, livePhoto) {
   try {
     _preRenderedCanvas = await createCompositeEvidenceFrame(student, student.photoUrl, livePhoto, 'PREVIEW');
   } catch (err) {
-    console.warn('Pre-render frame error:', err);
+    console.warn('Pre-render error:', err);
   }
 }
 
@@ -459,18 +432,12 @@ async function sendAlertToBackend(studentList, logEntry, alertMessage, composite
       compositeFrame: compositeFrameDataUrl || ''
     };
 
-    const resp = await fetch('/api/send-alert', {
+    await fetch('/api/send-alert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    if (resp.ok) {
-      const data = await resp.json();
-      console.log('[Backend Alert Direct Dispatch]', data);
-    }
-  } catch (err) {
-    // Expected note if running static server (python -m http.server)
-  }
+  } catch (err) { }
 }
 
 async function sendUltraMsgDirect(phone, message, imageBase64, settings) {
@@ -479,8 +446,6 @@ async function sendUltraMsgDirect(phone, message, imageBase64, settings) {
     const token = settings.ultramsgToken;
     if (!instance || !token) return;
 
-    showToast(`📡 Sending dual evidence frame directly to HOD via UltraMsg API...`);
-
     const url = `https://api.ultramsg.com/${instance}/messages/image`;
     const params = new URLSearchParams();
     params.append('token', token);
@@ -488,70 +453,18 @@ async function sendUltraMsgDirect(phone, message, imageBase64, settings) {
     params.append('image', imageBase64);
     params.append('caption', message);
 
-    const resp = await fetch(url, {
+    await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString()
     });
-
-    const resData = await resp.json();
-    if (resData.sent === 'true' || resData.id) {
-      showToast(`✅ Evidence frame & alert delivered directly to HOD (${phone}) via WhatsApp API!`);
-    } else {
-      console.warn('UltraMsg note:', resData);
-    }
-  } catch (err) {
-    console.warn('UltraMsg direct send error:', err);
-  }
-}
-
-async function uploadEvidenceFrameOnline(blob, incidentId, regNo) {
-  if (!blob) return null;
-
-  // 1. Try Firebase Storage if initialized
-  if (window.firebase && firebase.storage) {
-    try {
-      const storageRef = firebase.storage().ref(`incidents/${incidentId}_${regNo}.jpg`);
-      const uploadTask = await storageRef.put(blob, { contentType: 'image/jpeg' });
-      const downloadUrl = await uploadTask.ref.getDownloadURL();
-      if (downloadUrl) {
-        console.log('[Firebase Storage Upload OK]', downloadUrl);
-        return downloadUrl;
-      }
-    } catch (fbErr) {
-      console.warn('Firebase Storage upload note:', fbErr);
-    }
-  }
-
-  // 2. Try Freeimage.host API for direct public photo link
-  try {
-    const formData = new FormData();
-    formData.append('key', '6d207e02198a847a53d0a894f8342e34');
-    formData.append('action', 'upload');
-    formData.append('source', blob, `evidence_${incidentId}.jpg`);
-    formData.append('format', 'json');
-
-    const response = await fetch('https://freeimage.host/api/1/upload', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await response.json();
-    if (data && data.image && data.image.url) {
-      console.log('[Freeimage Upload OK]', data.image.url);
-      return data.image.url;
-    }
-  } catch (apiErr) {
-    console.warn('Freeimage upload note:', apiErr);
-  }
-
-  return null;
+  } catch (err) { }
 }
 
 async function dispatchIncidentReport(studentList) {
   if (!studentList || studentList.length === 0) return;
   playCue('alert');
 
-  // Immediately close verification modal so user workflow is uninterrupted
   const verifyModal = document.getElementById('verify-modal');
   if (verifyModal) verifyModal.classList.add('hidden');
   currentIncidentStudent = null;
@@ -567,7 +480,7 @@ async function dispatchIncidentReport(studentList) {
   const logEntry = {
     id: 'INC-' + Date.now().toString().slice(-6),
     timestamp: new Date().toLocaleString(),
-    location: firstStudent.location || 'Campus Grounds / Canteen',
+    location: firstStudent.location || 'Campus Grounds',
     students: studentList,
     status: `Alert sent to HOD (${cleanPhone || 'No Phone'})`
   };
@@ -580,13 +493,11 @@ async function dispatchIncidentReport(studentList) {
     return;
   }
 
-  showToast(`🎨 Generating dual evidence photo frame for HOD (${cleanPhone})...`);
+  showToast(`⚡ Preparing HOD alert for (${cleanPhone})...`);
 
-  // 1. Generate the single composite evidence canvas with Master + Live Photo in same frame
+  // Fast local canvas generation (no hanging external uploads)
   let frameDataUrl = '';
-  let frameBlob = null;
   let framePngBlob = null;
-  let onlinePhotoUrl = null;
   try {
     const canvas = await createCompositeEvidenceFrame(
       firstStudent,
@@ -594,25 +505,10 @@ async function dispatchIncidentReport(studentList) {
       firstStudent.capturedLivePhoto,
       logEntry.id
     );
-    frameDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-    frameBlob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    frameDataUrl = canvas.toDataURL('image/jpeg', 0.9);
     framePngBlob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-
-    // Upload frame online so it displays directly as an image in WhatsApp!
-    if (frameBlob) {
-      showToast('☁️ Uploading dual evidence photo for WhatsApp preview...');
-      onlinePhotoUrl = await uploadEvidenceFrameOnline(frameBlob, logEntry.id, cleanPhone);
-    }
-  } catch (canvasErr) {
-    console.warn('Canvas frame creation note:', canvasErr);
-  }
-
-  // Construct official HOD alert message (including the direct photo link)
-  let photoSection = '';
-  if (onlinePhotoUrl) {
-    photoSection = `\n\n🖼️ *DUAL EVIDENCE PHOTO (Master + Live in same frame):*\n👉 ${onlinePhotoUrl}`;
-  } else {
-    photoSection = `\n\n📸 *DUAL EVIDENCE PHOTO:* Generated & attached (Dual Master + Live photo frame).`;
+  } catch (e) {
+    console.warn('Canvas gen note:', e);
   }
 
   let alertMessage = '';
@@ -625,12 +521,14 @@ async function dispatchIncidentReport(studentList) {
       `🆔 *Reg No:* ${firstStudent.regNo}\n` +
       `📚 *Class:* ${firstStudent.department} Year ${firstStudent.year}-${firstStudent.section}\n` +
       `👨‍🏫 *Class Advisor:* ${firstStudent.advisorName || 'Not assigned'}\n` +
+      `🎓 *HOD Name:* ${firstStudent.hodName || 'Not assigned'}\n` +
+      `📞 *HOD Phone:* ${firstStudent.hodPhone || 'Not assigned'}\n` +
       `📍 *Location Caught:* ${firstStudent.location}\n` +
       `⏰ *Skipped Session:* ${firstStudent.scheduledPeriod?.subject} (${firstStudent.scheduledPeriod?.timeRange})\n` +
       `👨‍🏫 *Faculty:* ${firstStudent.scheduledPeriod?.faculty}\n\n` +
       `📋 *Incident ID:* #${logEntry.id}\n` +
-      `📅 *Date & Time:* ${firstStudent.timestamp}` +
-      photoSection + `\n\n` +
+      `📅 *Date & Time:* ${firstStudent.timestamp}\n\n` +
+      `📸 *Evidence Frame:* Generated locally & downloaded.\n\n` +
       `Dispatched automatically by Student Roaming Detector AI.`;
   } else {
     alertMessage =
@@ -642,23 +540,19 @@ async function dispatchIncidentReport(studentList) {
         `   Skipped: ${s.scheduledPeriod?.subject} (${s.scheduledPeriod?.timeRange})`
       ).join('\n\n') +
       `\n\n📋 *Incident ID:* #${logEntry.id}\n` +
-      `📅 *Date & Time:* ${new Date().toLocaleString()}` +
-      photoSection + `\n\n` +
+      `📅 *Date & Time:* ${new Date().toLocaleString()}\n\n` +
+      `📸 *Evidence Frame:* Generated locally & downloaded.\n\n` +
       `Dispatched automatically by Student Roaming Detector AI.`;
   }
 
-  // 2. Automatically copy the dual-photo frame to clipboard
+  // Copy evidence frame to clipboard silently if supported
   if (framePngBlob && navigator.clipboard && window.ClipboardItem) {
     try {
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': framePngBlob })
-      ]);
-    } catch (clipErr) {
-      console.warn('Clipboard write note:', clipErr);
-    }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': framePngBlob })]);
+    } catch (e) { }
   }
 
-  // 3. Automatically download the dual-photo frame file so it is saved locally
+  // Download evidence frame locally
   if (frameDataUrl) {
     try {
       const cleanReg = String(firstStudent.regNo).replace(/[^a-z0-9_-]+/gi, '_');
@@ -666,22 +560,17 @@ async function dispatchIncidentReport(studentList) {
       downloadLink.href = frameDataUrl;
       downloadLink.download = `campustrack-evidence-${cleanReg}-${logEntry.id}.jpg`;
       downloadLink.click();
-    } catch (dlErr) {
-      console.warn('Download note:', dlErr);
-    }
+    } catch (e) { }
   }
 
-  // 4. Send to backend in background (saves evidence to disk & dispatches if backend running)
-  sendAlertToBackend(studentList, logEntry, alertMessage, frameDataUrl).catch(e => console.warn(e));
-
-  // 5. Send via UltraMsg WhatsApp API if configured in Settings
+  // Background backend dispatch / UltraMsg
+  sendAlertToBackend(studentList, logEntry, alertMessage, frameDataUrl).catch(e => { });
   const settings = (typeof getAppSettings === 'function') ? getAppSettings() : {};
   if (settings.ultramsgInstance && settings.ultramsgToken && frameDataUrl) {
     sendUltraMsgDirect(cleanPhone, alertMessage, frameDataUrl, settings);
   }
 
-  // 6. Automatically open WhatsApp chat directly for that exact HOD phone number!
-  // Takes the number from database directly - never asks to select or search a number
+  // Instantly open WhatsApp with the complete HOD number and pre-filled message
   const encodedText = encodeURIComponent(alertMessage);
   const waUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
   const win = window.open(waUrl, '_blank');
@@ -689,7 +578,7 @@ async function dispatchIncidentReport(studentList) {
     window.location.href = waUrl;
   }
 
-  showToast(`✅ Dispatched to HOD (${cleanPhone})! Photo link included in message & copied to clipboard.`);
+  showToast(`✅ Dispatched to HOD (${cleanPhone})!`);
   if (typeof resumeScanner === 'function') resumeScanner(true);
 }
 

@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
 
 app = FastAPI(title="Campus Track - Face Verification Backend")
 
@@ -19,7 +18,7 @@ app = FastAPI(title="Campus Track - Face Verification Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,6 +46,17 @@ def get_face_app():
     if _face_app is None:
         with _model_lock:
             if _face_app is None:
+                # Import InsightFace only when a verification request actually needs it.
+                # This lets the health check and static frontend start even before the
+                # optional native ML dependencies are installed.
+                try:
+                    from insightface.app import FaceAnalysis
+                except ImportError as import_error:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="InsightFace backend dependency is unavailable. Install the packages in requirements.txt and restart the server."
+                    ) from import_error
+
                 # Use lightweight 'buffalo_s' (~20MB total model weights vs ~350MB for 'buffalo_l')
                 model_name = os.getenv("INSIGHTFACE_MODEL", "buffalo_s")
                 det_size = int(os.getenv("DET_SIZE", "640"))

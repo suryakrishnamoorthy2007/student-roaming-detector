@@ -227,21 +227,25 @@ function simulateStudentSelection(regNo) {
 /**
  * Links a specific detected face descriptor to an enrolled student.
  */
-function enrollFaceDescriptorForStudent(regNo, descriptor, photoUrl) {
+async function enrollFaceDescriptorForStudent(regNo, descriptor, photoUrl) {
   const students = getStudents();
-  const student = students.find(s => s.regNo === regNo);
+  const student = students.find(s => String(s.regNo) === String(regNo));
   if (!student) return showToast('Student record not found');
+  if (typeof isValidFaceDescriptor === 'function' && !isValidFaceDescriptor(descriptor)) {
+    return showToast('Face profile is invalid. Capture the face again.');
+  }
 
-  student.faceDescriptor = descriptor;
+  const existing = Array.isArray(student.faceDescriptors) && student.faceDescriptors.length
+    ? student.faceDescriptors.filter(d => typeof isValidFaceDescriptor !== 'function' || isValidFaceDescriptor(d))
+    : [student.faceDescriptor].filter(Boolean);
+  const next = [...existing, Array.from(descriptor)].slice(-3);
+  student.faceDescriptors = next;
+  student.faceDescriptor = next[next.length - 1];
   if (photoUrl) student.photoUrl = photoUrl;
 
   saveStudents(students);
-  rebuildFaceMatcher();
-
-  showToast(`Face linked to ${student.name}! Tap Snap to re-verify.`);
-  if (typeof triggerVerification === 'function') {
-    triggerVerification(regNo, photoUrl || student.photoUrl, 98);
-  }
+  if (typeof saveStudentToCloud === 'function') await saveStudentToCloud(student);
+  showToast(`Face profile updated for ${student.name}. Perform a fresh scan to verify.`);
 }
 
 /**
@@ -286,7 +290,7 @@ if (document.readyState === 'loading') {
 /**
  * Quick enrollment helper for real-world testing from the scanner view
  */
-function openQuickNewStudentModal() {
+async function openQuickNewStudentModal() {
   const regNo = prompt('Enter Student Register Number (e.g. 110324104199):');
   if (!regNo || !regNo.trim()) return;
   const name = prompt('Enter Student Full Name:');
@@ -307,16 +311,19 @@ function openQuickNewStudentModal() {
       hodEmail: 'hod.cse@college.edu',
       hodPhone: '+919876543210',
       photoUrl: window._lastCapturedFace.photoUrl,
-      faceDescriptor: window._lastCapturedFace.descriptor
+      faceDescriptor: Array.from(window._lastCapturedFace.descriptor),
+      faceDescriptors: [Array.from(window._lastCapturedFace.descriptor)]
     };
     const existingIdx = students.findIndex(s => s.regNo === cleanReg);
-    if (existingIdx >= 0) students[existingIdx] = newStudent;
-    else students.push(newStudent);
+    if (existingIdx >= 0) {
+      return showToast(`Register number ${cleanReg} already exists. Update that student's face from Admin instead.`);
+    }
+    students.push(newStudent);
 
     saveStudents(students);
     rebuildFaceMatcher();
-    showToast(`Enrolled ${cleanName} (${cleanReg})!`);
-    triggerVerification(cleanReg, window._lastCapturedFace.photoUrl, 98);
+    if (typeof saveStudentToCloud === 'function') await saveStudentToCloud(newStudent);
+    showToast(`Enrolled ${cleanName} (${cleanReg}) and saved the face profile. No incident was created.`);
   } else {
     showToast('Please snap a photo first before enrolling');
   }
