@@ -153,16 +153,17 @@ function editStudentDetails(regNo) {
 }
 
 async function deleteStudent(regNo) {
+  const cleanRegNo = String(regNo || '').trim();
   const students = getStudents();
-  const student = students.find(item => item.regNo === regNo);
+  const student = students.find(item => String(item.regNo).trim() === cleanRegNo);
   if (!student) return showToast('Student details were not found');
   if (!window.confirm(`Delete ${student.name} (${student.regNo}) and their face recognition data?`)) return;
 
-  if (editingStudentRegNo === regNo) cancelStudentEdit();
-  saveStudents(students.filter(item => item.regNo !== regNo));
+  if (String(editingStudentRegNo || '').trim() === cleanRegNo) cancelStudentEdit();
+  saveStudents(students.filter(item => String(item.regNo).trim() !== cleanRegNo));
   renderAdminStudentData();
-  const deletedFromCloud = await deleteStudentFromCloud(regNo);
-  if (deletedFromCloud) showToast(`Deleted ${student.name} from student records`);
+  const deletedFromCloud = await deleteStudentFromCloud(cleanRegNo);
+  if (deletedFromCloud) showToast(`Deleted ${student.name} from student records & cloud`);
   else if (cloudSyncReady) showToast('Deleted locally, but cloud deletion failed');
   else showToast('Deleted from this device; cloud was unavailable');
 }

@@ -8,6 +8,9 @@ let studentsListenerUnsubscribe = null;
 let initialStudentSnapshotHandled = false;
 let seedingInitialStudents = false;
 
+const STORAGE_KEY_CLOUD_SYNCED = 'CAMPUSTRACK_CLOUD_SYNCED_V1';
+let lastKnownStudentCount = null;
+
 /**
  * Handle the first cloud roster safely. An empty brand-new Firestore collection must
  * not erase an existing local roster; seed it once. Later empty snapshots are applied
@@ -19,23 +22,33 @@ function applyCloudStudentRoster(cloudStudents) {
     return getStudents();
   }
 
+  const alreadySyncedBefore = localStorage.getItem(STORAGE_KEY_CLOUD_SYNCED) === 'true';
+
   if (!initialStudentSnapshotHandled) {
     initialStudentSnapshotHandled = true;
-    if (safeCloudStudents.length === 0) {
-      // Do not upload built-in sample/demo records on a clean browser. Only seed data
-      // that had already been explicitly saved in this browser's local roster.
+    // Only attempt initial seeding if this browser has never synced with cloud before,
+    // has saved non-default local records, AND the cloud roster is empty.
+    // If this device was already synced before, an empty cloud roster means records were intentionally deleted!
+    if (safeCloudStudents.length === 0 && !alreadySyncedBefore) {
       const hasSavedLocalRoster = Boolean(localStorage.getItem(STORAGE_KEY_STUDENTS));
       const localStudents = hasSavedLocalRoster ? getStudents().slice() : [];
-      if (localStudents.length > 0) {
+      const isCustomRoster = localStudents.some(s => s && s.regNo !== "110324104105" && s.regNo !== "110324104116");
+      if (localStudents.length > 0 && isCustomRoster) {
         seedingInitialStudents = true;
-        updateCloudStatus(`Uploading ${localStudents.length} saved local student record${localStudents.length === 1 ? '' : 's'} to the empty cloud roster...`);
+        updateCloudStatus(`Uploading ${localStudents.length} saved local student record${localStudents.length === 1 ? '' : 's'} to empty cloud roster...`);
         Promise.all(localStudents.map(student => saveStudentToCloud(student)))
           .catch(error => console.warn('[Firebase] Initial roster seed failed:', error))
-          .finally(() => { seedingInitialStudents = false; });
+          .finally(() => { 
+            seedingInitialStudents = false;
+            localStorage.setItem(STORAGE_KEY_CLOUD_SYNCED, 'true');
+          });
         return localStudents;
       }
     }
   }
+
+  // Mark that cloud sync has successfully connected and provided an authoritative list
+  localStorage.setItem(STORAGE_KEY_CLOUD_SYNCED, 'true');
 
   // Never let a cloud copy that has no face profile erase a face profile this device
   // already holds (e.g. a failed upload, or another device saved the student without one).
@@ -97,12 +110,26 @@ function setupStudentRealtimeSync() {
       }
     });
 
-    // First empty snapshot is handled specially so local records are not discarded
-    // before this new Firebase project has been seeded.
+    const previousCount = lastKnownStudentCount;
     const appliedRoster = applyCloudStudentRoster(cloudStudents);
+    lastKnownStudentCount = appliedRoster.length;
+
     updateCloudStatus(`Real-time synced (${appliedRoster.length} student${appliedRoster.length === 1 ? '' : 's'})`);
+
+    // Notify user in real-time when another device deletes or adds records
+    if (previousCount !== null && previousCount !== appliedRoster.length) {
+      if (typeof showToast === 'function') {
+        const diff = appliedRoster.length - previousCount;
+        if (diff < 0) {
+          showToast(`Cloud Sync: ${Math.abs(diff)} student${Math.abs(diff) === 1 ? '' : 's'} removed`);
+        } else {
+          showToast(`Cloud Sync: ${diff} new student${diff === 1 ? '' : 's'} added`);
+        }
+      }
+    }
   }, (err) => {
     console.warn('Real-time student sync error:', err);
+    updateCloudStatus(`Cloud sync error: ${err.message || 'offline'}`);
   });
 }
 
@@ -142,11 +169,16 @@ async function initializeCloudSync() {
       firebase.initializeApp(FIREBASE_CONFIG);
     }
 
-    const auth = firebase.auth();
-    // Finish anonymous sign-in before attaching Firestore listeners/writes. Starting the
-    // listener before auth completed could produce permission errors on stricter rules.
-    if (!auth.currentUser) {
-      await auth.signInAnonymously();
+    // Safely attempt anonymous authentication if enabled, but do not block Firestore if not configured
+    try {
+      if (firebase.auth) {
+        const auth = firebase.auth();
+        if (!auth.currentUser) {
+          await auth.signInAnonymously();
+        }
+      }
+    } catch (authErr) {
+      console.warn('[Firebase] Anonymous sign-in unavailable, proceeding with direct Firestore access:', authErr.message || authErr);
     }
 
     cloudDb = firebase.firestore();
@@ -311,7 +343,9 @@ async function saveStudentToCloud(student) {
       delete payload.faceDescriptors;
     }
     Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
-    await cloudDb.collection('students').doc(String(student.regNo)).set(payload, { merge: true });
+    const cleanRegNo = String(student.regNo).trim();
+    payload.regNo = cleanRegNo;
+    await cloudDb.collection('students').doc(cleanRegNo).set(payload, { merge: true });
     return true;
   } catch (e) {
     console.error('Failed to sync student to cloud:', e);
@@ -339,8 +373,18 @@ async function deleteUserFromCloud(userId) {
 
 async function deleteStudentFromCloud(regNo) {
   if (!cloudSyncReady || !cloudDb) return false;
+  const cleanRegNo = String(regNo || '').trim();
+  if (!cleanRegNo) return false;
   try {
-    await cloudDb.collection('students').doc(String(regNo)).delete();
+    await cloudDb.collection('students').doc(cleanRegNo).delete();
+    // Also remove enrolled photo from Firebase Storage if it was uploaded
+    try {
+      if (window.firebase && firebase.storage) {
+        const safeRegNo = encodeURIComponent(cleanRegNo);
+        const photoRef = firebase.storage().ref().child(`student-photos/${safeRegNo}/profile.jpg`);
+        await photoRef.delete();
+      }
+    } catch (_) {}
     return true;
   } catch (error) {
     console.error('Failed to delete student from cloud:', error);
