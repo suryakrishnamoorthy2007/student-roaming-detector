@@ -1,23 +1,32 @@
 import os
+import re
+import time
+import uuid
 import threading
 import base64
 import urllib.parse
 import urllib.request
+from collections import defaultdict, deque
 from typing import Optional
 from pydantic import BaseModel
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import cv2
 import numpy as np
 
 app = FastAPI(title="Campus Track - Face Verification Backend")
 
-# Enable CORS so your frontend HTML can communicate with this backend
+# CORS: the bundled frontend is served by this same server, so same-origin requests need no CORS.
+# Set ALLOWED_ORIGINS="https://your-site.com,https://other.com" to restrict cross-origin callers.
+# The default "*" keeps older setups (frontend hosted elsewhere) working.
+_origins_env = os.getenv("ALLOWED_ORIGINS", "*").strip()
+ALLOWED_ORIGINS = ["*"] if _origins_env == "*" else [o.strip() for o in _origins_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,30 +43,57 @@ elif os.path.isdir("static"):
 else:
     STATIC_DIR = "static"
 
+# Evidence photos contain student faces. They are stored OUTSIDE the public static folder and
+# are never mounted as a web route. (On Render's free tier this disk is wiped on every restart.)
+EVIDENCE_DIR = os.getenv("EVIDENCE_DIR", os.path.join(BASE_DIR, "evidence"))
+
+# Optional shared secret for /api/send-alert. If ALERT_API_KEY is set, callers must send it
+# in the "X-API-Key" header. Leave unset for the bundled same-origin frontend.
+ALERT_API_KEY = os.getenv("ALERT_API_KEY", "").strip()
+
+# Simple in-memory rate limit so the alert endpoint cannot be used to spam WhatsApp.
+RATE_LIMIT_MAX = int(os.getenv("ALERT_RATE_LIMIT", "20"))      # requests ...
+RATE_LIMIT_WINDOW = int(os.getenv("ALERT_RATE_WINDOW", "60"))  # ... per this many seconds, per IP
+_rate_hits = defaultdict(deque)
+_rate_lock = threading.Lock()
+
 # Global holder and thread lock for lazy initialization
 _face_app = None
 _model_lock = threading.Lock()
 
+
+def _rate_limited(client_id: str) -> bool:
+    now = time.monotonic()
+    with _rate_lock:
+        hits = _rate_hits[client_id]
+        while hits and now - hits[0] > RATE_LIMIT_WINDOW:
+            hits.popleft()
+        if len(hits) >= RATE_LIMIT_MAX:
+            return True
+        hits.append(now)
+        return False
+
+
 def get_face_app():
-    """Lazily loads and caches the lightweight FaceAnalysis model on first request.
-    Prevents memory spikes and timeout during uvicorn startup on constrained environments (Render 512MB free tier).
+    """Lazily loads and caches the InsightFace model on first /verify-face request.
+    InsightFace is OPTIONAL: the bundled web app does its own face recognition in the browser
+    (face-api.js) and never calls this endpoint. Install requirements-insightface.txt only if
+    you want the server-side /verify-face detector.
     """
     global _face_app
     if _face_app is None:
         with _model_lock:
             if _face_app is None:
-                # Import InsightFace only when a verification request actually needs it.
-                # This lets the health check and static frontend start even before the
-                # optional native ML dependencies are installed.
                 try:
                     from insightface.app import FaceAnalysis
                 except ImportError as import_error:
                     raise HTTPException(
                         status_code=503,
-                        detail="InsightFace backend dependency is unavailable. Install the packages in requirements.txt and restart the server."
+                        detail="InsightFace is not installed. Run: pip install -r requirements-insightface.txt and restart the server."
                     ) from import_error
 
-                # Use lightweight 'buffalo_s' (~20MB total model weights vs ~350MB for 'buffalo_l')
+                # 'buffalo_s' is the smaller model pack (much lighter than 'buffalo_l'); its files are
+                # downloaded automatically on first use, so the first request needs internet access.
                 model_name = os.getenv("INSIGHTFACE_MODEL", "buffalo_s")
                 det_size = int(os.getenv("DET_SIZE", "640"))
 
@@ -68,6 +104,12 @@ def get_face_app():
                 app.state.app_face = face_analysis
                 print("[Backend] InsightFace initialized successfully.")
     return _face_app
+
+
+def _detect_faces(img):
+    """CPU-heavy work; always called through run_in_threadpool so it never blocks the event loop."""
+    face_app = get_face_app()
+    return face_app.get(img)
 
 
 @app.get("/health")
@@ -84,22 +126,20 @@ async def verify_face(file: UploadFile = File(...)):
     try:
         # Read the uploaded image from the frontend camera snapshot
         contents = await file.read()
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image too large (max 10 MB).")
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img is None:
             raise HTTPException(status_code=400, detail="Invalid image file.")
 
-        # Lazily obtain the model instance (loads only once on first request)
-        face_app = get_face_app()
-
-        # Detect faces and extract deep embeddings
-        faces = face_app.get(img)
+        # Run model loading + inference in a worker thread so other requests keep being served.
+        faces = await run_in_threadpool(_detect_faces, img)
 
         if len(faces) == 0:
             return {"status": "no_face_detected"}
 
-        # Return details of the detected face(s)
         detected_results = []
         for face in faces:
             detected_results.append({
@@ -132,80 +172,109 @@ class HODAlertRequest(BaseModel):
     message: str
     masterPhoto: Optional[str] = None
     livePhoto: Optional[str] = None
+    compositeFrame: Optional[str] = None  # sent by the frontend; accepted but not stored
 
 
+def _post_form(url: str, fields: dict):
+    data = urllib.parse.urlencode(fields).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        resp.read()
+
+
+# Plain "def" (not "async def"): FastAPI runs it in a worker thread, so the blocking
+# urllib calls to the WhatsApp gateway no longer freeze the whole server.
 @app.post("/api/send-alert")
-async def send_hod_alert(payload: HODAlertRequest):
-    try:
-        evidence_dir = os.path.join(STATIC_DIR, "evidence")
-        os.makedirs(evidence_dir, exist_ok=True)
+def send_hod_alert(payload: HODAlertRequest, request: Request):
+    if ALERT_API_KEY and request.headers.get("x-api-key", "") != ALERT_API_KEY:
+        return JSONResponse(status_code=401, content={"status": "error", "detail": "Invalid or missing API key."})
 
+    client_ip = request.client.host if request.client else "unknown"
+    if _rate_limited(client_ip):
+        return JSONResponse(status_code=429, content={"status": "error", "detail": "Too many alerts. Please wait a minute."})
+
+    try:
         saved_files = []
         clean_reg = "".join(c for c in payload.regNo if c.isalnum() or c in ("-", "_")) or "unknown"
         clean_id = "".join(c for c in payload.incidentId if c.isalnum() or c in ("-", "_")) or "inc"
 
-        # Save live camera snapshot to disk if provided as data URL
+        # Save live camera snapshot to the private evidence folder if provided as a data URL.
+        # The random suffix makes file names unguessable.
         if payload.livePhoto and payload.livePhoto.startswith("data:"):
             try:
+                os.makedirs(EVIDENCE_DIR, exist_ok=True)
                 _, b64data = payload.livePhoto.split(",", 1)
                 img_data = base64.b64decode(b64data)
-                live_filename = f"{clean_id}_{clean_reg}_live.jpg"
-                live_path = os.path.join(evidence_dir, live_filename)
-                with open(live_path, "wb") as f:
+                live_filename = f"{clean_id}_{clean_reg}_{uuid.uuid4().hex[:8]}_live.jpg"
+                with open(os.path.join(EVIDENCE_DIR, live_filename), "wb") as f:
                     f.write(img_data)
-                saved_files.append(f"/static/evidence/{live_filename}")
+                saved_files.append(live_filename)
             except Exception as e:
                 print(f"[Alert] Error saving live photo: {e}")
+
+        delivery = "not_configured"
+        errors = []
 
         # Send via WhatsApp API Gateway if credentials exist (e.g. UltraMsg)
         ultramsg_instance = os.getenv("ULTRAMSG_INSTANCE_ID")
         ultramsg_token = os.getenv("ULTRAMSG_TOKEN")
         if ultramsg_instance and ultramsg_token and payload.hodPhone:
+            clean_phone = "".join(c for c in payload.hodPhone if c.isdigit())
+            safe_instance = re.sub(r"[^A-Za-z0-9_\-]", "", ultramsg_instance)
             try:
-                clean_phone = "".join(c for c in payload.hodPhone if c.isdigit())
-                msg_data = urllib.parse.urlencode({
-                    "token": ultramsg_token,
-                    "to": clean_phone,
-                    "body": payload.message
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"https://api.ultramsg.com/{ultramsg_instance}/messages/chat",
-                    data=msg_data,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                _post_form(
+                    f"https://api.ultramsg.com/{safe_instance}/messages/chat",
+                    {"token": ultramsg_token, "to": clean_phone, "body": payload.message},
                 )
-                urllib.request.urlopen(req, timeout=5)
-
-                if payload.livePhoto:
-                    photo_data = urllib.parse.urlencode({
-                        "token": ultramsg_token,
-                        "to": clean_phone,
-                        "image": payload.livePhoto,
-                        "caption": f"Live Camera Snapshot - {payload.studentName} ({payload.regNo})"
-                    }).encode("utf-8")
-                    req_img = urllib.request.Request(
-                        f"https://api.ultramsg.com/{ultramsg_instance}/messages/image",
-                        data=photo_data,
-                        headers={"Content-Type": "application/x-www-form-urlencoded"}
-                    )
-                    urllib.request.urlopen(req_img, timeout=5)
+                delivery = "sent"
             except Exception as e:
-                print(f"[Alert] UltraMsg dispatch error: {e}")
+                delivery = "failed"
+                errors.append(f"text: {e}")
+                print(f"[Alert] UltraMsg text dispatch error: {e}")
 
-        print(f"[Alert] Direct HOD alert processed successfully for {payload.studentName} ({payload.regNo}) -> HOD Phone: {payload.hodPhone}")
+            if payload.livePhoto:
+                try:
+                    _post_form(
+                        f"https://api.ultramsg.com/{safe_instance}/messages/image",
+                        {
+                            "token": ultramsg_token,
+                            "to": clean_phone,
+                            "image": payload.livePhoto,
+                            "caption": f"Live Camera Snapshot - {payload.studentName} ({payload.regNo})",
+                        },
+                    )
+                except Exception as e:
+                    errors.append(f"image: {e}")
+                    print(f"[Alert] UltraMsg image dispatch error: {e}")
+
+        print(f"[Alert] HOD alert processed for {payload.studentName} ({payload.regNo}) delivery={delivery}")
+        if delivery == "failed":
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "status": "error",
+                    "detail": "WhatsApp gateway call failed: " + "; ".join(errors),
+                    "incidentId": payload.incidentId,
+                    "savedEvidence": saved_files,
+                },
+            )
         return {
             "status": "success",
+            "delivery": delivery,
             "message": f"Alert processed for HOD ({payload.hodPhone})",
             "incidentId": payload.incidentId,
-            "savedEvidence": saved_files
+            "savedEvidence": saved_files,
         }
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
 
 
 def get_app_html():
     """Returns the path to the main application HTML file, checking multiple names for compatibility."""
     if os.path.isdir(STATIC_DIR):
-        for candidate in ["index.html", "campustrack.html", "campus track.html"]:
+        for candidate in ["index.html", "campustrack.html", "campus-track.html", "campus track.html"]:
             p = os.path.join(STATIC_DIR, candidate)
             if os.path.isfile(p):
                 return p
@@ -218,10 +287,12 @@ async def serve_index():
     return FileResponse(get_app_html())
 
 
-# Direct routes for all filename variations so no link or bookmark throws 404
+# Direct routes for the filename variations so older links or bookmarks do not 404.
+# (A space in the URL arrives already decoded, so "/campus track.html" covers "%20" too.)
+@app.get("/index.html")
 @app.get("/campustrack.html")
+@app.get("/campus-track.html")
 @app.get("/campus track.html")
-@app.get("/campus%20track.html")
 async def serve_campustrack_pages():
     return FileResponse(get_app_html())
 
@@ -238,21 +309,21 @@ async def serve_manifest():
 async def serve_sw():
     p = os.path.join(STATIC_DIR, "sw.js")
     if os.path.isfile(p):
-        return FileResponse(p)
+        # No long-lived caching of the service worker file itself, so updates are detected.
+        return FileResponse(p, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
     raise HTTPException(status_code=404, detail="sw.js not found")
 
 
 # Mount static files and subdirectories
 if os.path.isdir(STATIC_DIR):
-    css_path = os.path.join(STATIC_DIR, "css")
-    js_path = os.path.join(STATIC_DIR, "js")
-    if os.path.isdir(css_path):
-        app.mount("/css", StaticFiles(directory=css_path), name="css")
-    if os.path.isdir(js_path):
-        app.mount("/js", StaticFiles(directory=js_path), name="js")
+    for _name in ("css", "js", "icons"):
+        _path = os.path.join(STATIC_DIR, _name)
+        if os.path.isdir(_path):
+            app.mount(f"/{_name}", StaticFiles(directory=_path), name=_name)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n[CampusTrack AI] Server started at http://localhost:8080 (Press Ctrl+C to stop)\n")
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    port = int(os.getenv("PORT", "8080"))
+    print(f"\n[CampusTrack AI] Server started at http://localhost:{port} (Press Ctrl+C to stop)\n")
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -109,6 +109,7 @@ async function initAI() {
 
     showToast('Scanner AI ready · Dual-range active');
     rebuildFaceMatcher();
+    await warmUpModels();
 
     // If initial workflow is live, start loop
     if (scanWorkflow === 'live') {
@@ -133,7 +134,7 @@ const FACE_MATCH_MAX_DISTANCE = 0.52;
 // A wider candidate margin is intentional: twins and similar-looking students should
 // fall back to ID/staff verification instead of being guessed from face alone.
 const FACE_MATCH_MIN_GAP = 0.075;
-const MATCH_FAILURE_PRIORITY = { unknown: 0, lowSimilarity: 1, lowQuality: 2, inconsistent: 2, ambiguous: 3 };
+const MATCH_FAILURE_PRIORITY = { unknown: 0, lowSimilarity: 1, lowQuality: 2, inconsistent: 2, ambiguous: 3, noProfiles: 4 };
 function noteFaceMatchFailure(reason) {
   if ((MATCH_FAILURE_PRIORITY[reason] || 0) >= (MATCH_FAILURE_PRIORITY[lastFaceMatchFailureReason] || 0)) {
     lastFaceMatchFailureReason = reason;
@@ -206,12 +207,14 @@ function rebuildFaceMatcher() {
 // A cached, flat template index avoids rebuilding Float32Arrays for every face/frame.
 
 function findReliableStudentMatch(descriptor, students) {
+  if (descriptor === undefined || descriptor === null) return null; // face skipped (too small / over cap)
   if (!window.faceapi || !isValidFaceDescriptor(descriptor)) {
     noteFaceMatchFailure('lowQuality');
     return null;
   }
   if (!faceTemplateIndex.length) {
-    noteFaceMatchFailure('lowQuality');
+    // The roster may list students, but none of them has a usable enrolled face profile.
+    noteFaceMatchFailure('noProfiles');
     return null;
   }
 
@@ -408,6 +411,115 @@ function handleZoomSlider(val) {
   setZoomMultiplier(parseFloat(val));
 }
 
+
+/* ==========================================================================
+   Real-time pipeline helpers (v8)
+   ========================================================================== */
+
+// Overlay alignment: the <video> is shown with object-fit: cover (and optional CSS zoom) but the
+// overlay <canvas> used to be stretched to the box, so on phones (3:4 portrait box, 16:9 video)
+// face boxes and eye contours landed beside the real face. This maps VIDEO pixels -> SCREEN pixels
+// exactly like object-fit: cover does.
+function computeOverlayView(boxW, boxH, srcW, srcH, zoom = 1) {
+  const cover = Math.max(boxW / srcW, boxH / srcH);
+  const ox = (boxW - srcW * cover) / 2;
+  const oy = (boxH - srcH * cover) / 2;
+  const cx = boxW / 2, cy = boxH / 2;
+  return {
+    s: cover * zoom,
+    tx: zoom * (ox - cx) + cx,
+    ty: zoom * (oy - cy) + cy,
+    w: boxW,
+    h: boxH
+  };
+}
+
+function syncOverlayCanvas(canvas, srcW, srcH, video) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const bw = Math.max(1, Math.round((rect.width || canvas.clientWidth || srcW) * dpr));
+  const bh = Math.max(1, Math.round((rect.height || canvas.clientHeight || srcH) * dpr));
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+  let zoom = 1;
+  if (video && video.style && video.style.transform) {
+    const m = /scale\(([\d.]+)\)/.exec(video.style.transform);
+    if (m) zoom = parseFloat(m[1]) || 1;
+  }
+  return computeOverlayView(bw, bh, srcW, srcH, zoom);
+}
+
+function overlayUnit(ctx) { return (ctx && ctx._u) || 1; }
+
+// Face descriptors (the 128-number embedding) are by far the most expensive step. Detect faces +
+// landmarks first, then compute embeddings ONLY for faces big enough to be matched, largest first,
+// capped per scan. Falls back to the original chained pipeline if anything goes wrong.
+const MIN_DESCRIPTOR_FACE_PX = 60;
+let currentMaxDescriptorFaces = 4;
+let splitPipelineBroken = false;
+
+async function detectWithDescriptors(input, detectorOpts) {
+  if (!splitPipelineBroken && faceapi.extractFaces && faceapi.nets && faceapi.nets.faceRecognitionNet) {
+    try {
+      const found = await faceapi.detectAllFaces(input, detectorOpts).withFaceLandmarks(useTinyLandmarks);
+      if (!found || !found.length) return [];
+      const eligible = found
+        .filter(d => d.detection.box.width >= MIN_DESCRIPTOR_FACE_PX && d.detection.box.height >= MIN_DESCRIPTOR_FACE_PX)
+        .sort((a, b) => (b.detection.box.width * b.detection.box.height) - (a.detection.box.width * a.detection.box.height))
+        .slice(0, currentMaxDescriptorFaces);
+      if (eligible.length) {
+        const rects = eligible.map(d => d.landmarks.align(null, { useDlibAlignment: true }));
+        const faceCanvases = await faceapi.extractFaces(input, rects);
+        const vectors = await Promise.all(faceCanvases.map(c => faceapi.nets.faceRecognitionNet.computeFaceDescriptor(c)));
+        eligible.forEach((d, i) => {
+          const v = vectors[i];
+          d.descriptor = Array.isArray(v) ? v[0] : v;
+        });
+      }
+      return found;
+    } catch (err) {
+      splitPipelineBroken = true;
+      console.warn('[FaceAI] Fast split pipeline failed; using standard pipeline:', err);
+    }
+  }
+  return faceapi.detectAllFaces(input, detectorOpts).withFaceLandmarks(useTinyLandmarks).withFaceDescriptors();
+}
+
+// Compile the GPU shaders once at start-up so the very first real scan is not slow.
+async function warmUpModels() {
+  try {
+    const blank = document.createElement('canvas');
+    blank.width = 160; blank.height = 160;
+    const bctx = blank.getContext('2d');
+    bctx.fillStyle = '#808080';
+    bctx.fillRect(0, 0, 160, 160);
+    try {
+      await faceapi.detectAllFaces(blank, new faceapi.TinyFaceDetectorOptions({ inputSize: 128, scoreThreshold: 0.9 }));
+    } catch (e) { /* ignore */ }
+    try {
+      const lm = useTinyLandmarks ? faceapi.nets.faceLandmark68TinyNet : faceapi.nets.faceLandmark68Net;
+      await lm.detectLandmarks(blank);
+    } catch (e) { /* ignore */ }
+    try {
+      await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(blank);
+    } catch (e) { /* ignore */ }
+    console.info('[FaceAI] Warm-up complete');
+  } catch (e) {
+    console.warn('[FaceAI] Warm-up skipped:', e);
+  }
+}
+
+// Eye Aspect Ratio from the 6 landmark points of one eye: ~0.3 open, <0.18 closed.
+function eyeAspectRatio(p) {
+  if (!p || p.length < 6) return null;
+  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const horizontal = d(p[0], p[3]);
+  if (!(horizontal > 0)) return null;
+  return (d(p[1], p[5]) + d(p[2], p[4])) / (2 * horizontal);
+}
+
 /**
  * Draws detected face boxes and the two eye-region landmark contours.
  * This uses the landmarks already produced by face-api.js, so it does not run a
@@ -442,7 +554,7 @@ function drawEyeLandmarkRegion(ctx, points, lineColor = '#22d3ee') {
   ctx.save();
   ctx.strokeStyle = lineColor;
   ctx.fillStyle = 'rgba(34, 211, 238, 0.10)';
-  ctx.lineWidth = Math.max(1.5, ctx.canvas.width / 900);
+  ctx.lineWidth = 2 * overlayUnit(ctx);
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
   for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
@@ -454,13 +566,14 @@ function drawEyeLandmarkRegion(ctx, points, lineColor = '#22d3ee') {
   // a claim that the iris/pupil has been separately segmented.
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  const radius = Math.max(2.5, Math.min(5, eyeHeight * 0.42));
+  const u = overlayUnit(ctx);
+  const radius = Math.max(3 * u, Math.min(6 * u, eyeHeight * 0.42));
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(cx - radius - 2, cy); ctx.lineTo(cx + radius + 2, cy);
-  ctx.moveTo(cx, cy - radius - 2); ctx.lineTo(cx, cy + radius + 2);
+  ctx.moveTo(cx - radius - 2 * u, cy); ctx.lineTo(cx + radius + 2 * u, cy);
+  ctx.moveTo(cx, cy - radius - 2 * u); ctx.lineTo(cx, cy + radius + 2 * u);
   ctx.stroke();
   ctx.restore();
 }
@@ -496,8 +609,9 @@ function drawDetectedFacesAndEyes(ctx, detections, fallbackOffsetX = 0, fallback
 
     ctx.save();
     ctx.strokeStyle = recognized ? '#22c55e' : '#22d3ee';
-    ctx.lineWidth = Math.max(1.5, ctx.canvas.width / 900);
-    ctx.setLineDash(recognized ? [] : [7, 5]);
+    const u = overlayUnit(ctx);
+    ctx.lineWidth = 2 * u;
+    ctx.setLineDash(recognized ? [] : [7 * u, 5 * u]);
     ctx.strokeRect(box.x, box.y, box.width, box.height);
     ctx.setLineDash([]);
 
@@ -508,7 +622,7 @@ function drawDetectedFacesAndEyes(ctx, detections, fallbackOffsetX = 0, fallback
       ctx.moveTo(jaw[0].x, jaw[0].y);
       for (let i = 1; i < jaw.length; i++) ctx.lineTo(jaw[i].x, jaw[i].y);
       ctx.strokeStyle = recognized ? 'rgba(34,197,94,0.85)' : 'rgba(34,211,238,0.85)';
-      ctx.lineWidth = Math.max(1.2, ctx.canvas.width / 1100);
+      ctx.lineWidth = 1.6 * u;
       ctx.stroke();
     }
     ctx.restore();
@@ -519,17 +633,29 @@ function drawDetectedFacesAndEyes(ctx, detections, fallbackOffsetX = 0, fallback
     drawEyeLandmarkRegion(ctx, leftEyePoints);
     drawEyeLandmarkRegion(ctx, rightEyePoints);
 
-    if (!recognized) {
-      const eyesDetected = leftEyePoints.length >= 4 && rightEyePoints.length >= 4;
-      const label = eyesDetected ? 'FACE + EYES DETECTED · NOT VERIFIED' : 'FACE DETECTED · EYE LANDMARKS UNAVAILABLE';
+    // Real-time eye state from the eye landmarks (Eye Aspect Ratio) - approximate, for display.
+    const earL = eyeAspectRatio(leftEyePoints);
+    const earR = eyeAspectRatio(rightEyePoints);
+    let eyeState = '';
+    if (earL !== null && earR !== null) {
+      const avgEar = (earL + earR) / 2;
+      eyeState = avgEar < 0.18 ? 'EYES CLOSED' : 'EYES OPEN';
+    }
+    const eyesDetected = leftEyePoints.length >= 4 && rightEyePoints.length >= 4;
+    const label = recognized
+      ? (eyeState ? `● ${eyeState}` : '')
+      : (eyesDetected ? `FACE + EYES DETECTED · NOT VERIFIED${eyeState ? ' · ' + eyeState : ''}` : 'FACE DETECTED · EYE LANDMARKS UNAVAILABLE');
+    if (label) {
       ctx.save();
-      ctx.font = `bold ${Math.max(10, Math.min(13, ctx.canvas.width / 95))}px sans-serif`;
-      const labelWidth = ctx.measureText(label).width + 12;
-      const labelY = Math.max(0, box.y - 23);
+      ctx.font = `bold ${11 * u}px sans-serif`;
+      const labelWidth = ctx.measureText(label).width + 12 * u;
+      const maxX = (ctx.canvas.width - (ctx._tx || 0)) / (1 / u) ;
+      const labelX = Math.max(0, Math.min(box.x, (Number.isFinite(maxX) ? maxX : box.x + labelWidth) - labelWidth));
+      const labelY = recognized ? box.y + box.height + 4 * u : Math.max(0, box.y - 23 * u);
       ctx.fillStyle = 'rgba(8, 47, 73, 0.92)';
-      ctx.fillRect(box.x, labelY, labelWidth, 20);
+      ctx.fillRect(labelX, labelY, labelWidth, 20 * u);
       ctx.fillStyle = '#a5f3fc';
-      ctx.fillText(label, box.x + 6, labelY + 14);
+      ctx.fillText(label, labelX + 6 * u, labelY + 14 * u);
       ctx.restore();
     }
   });
@@ -570,10 +696,9 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     const origW = sourceInput ? (sourceInput.width || 1280) : (video ? (video.videoWidth || 1280) : 1280);
     const origH = sourceInput ? (sourceInput.height || 720) : (video ? (video.videoHeight || 720) : 720);
 
-    if (canvas && (canvas.width !== origW || canvas.height !== origH)) {
-      canvas.width = origW;
-      canvas.height = origH;
-    }
+    // Overlay is drawn in screen space so it lines up with the cover-cropped video on phones.
+    const overlayView = canvas ? syncOverlayCanvas(canvas, origW, origH, sourceInput ? null : video) : null;
+    currentMaxDescriptorFaces = liveFastMode ? 4 : 10;
 
     let rawDetections = [];
     let detectedFromCrop = false;
@@ -587,9 +712,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
         inputSize: liveFastMode ? 256 : 320,
         scoreThreshold: liveFastMode ? 0.25 : 0.28
       });
-      rawDetections = await faceapi.detectAllFaces(inputElement, detectorOpts)
-        .withFaceLandmarks(useTinyLandmarks)
-        .withFaceDescriptors();
+      rawDetections = await detectWithDescriptors(inputElement, detectorOpts);
 
     } else if (scanDistanceMode === 'far') {
       // 2. CORRIDOR FAR RANGE (3m - 20m): Center 65% corridor crop at native HD resolution
@@ -608,9 +731,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       cropCtx.drawImage(inputElement, cropOffsetX, cropOffsetY, cropW, cropH, 0, 0, cropW, cropH);
 
       const detectorOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: liveFastMode ? 384 : 512, scoreThreshold: 0.16 });
-      rawDetections = await faceapi.detectAllFaces(cropCanvas, detectorOpts)
-        .withFaceLandmarks(useTinyLandmarks)
-        .withFaceDescriptors();
+      rawDetections = await detectWithDescriptors(cropCanvas, detectorOpts);
 
       detectedFromCrop = true;
 
@@ -621,9 +742,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
         inputSize: liveFastMode ? 256 : 320,
         scoreThreshold: liveFastMode ? 0.22 : 0.25
       });
-      const pass1Detections = await faceapi.detectAllFaces(inputElement, fastOpts)
-        .withFaceLandmarks(useTinyLandmarks)
-        .withFaceDescriptors();
+      const pass1Detections = await detectWithDescriptors(inputElement, fastOpts);
 
       let foundEnrolled = false;
       for (const det of (pass1Detections || [])) {
@@ -655,9 +774,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
             inputSize: liveFastMode ? 416 : 512,
             scoreThreshold: 0.16
           });
-          const pass2Detections = await faceapi.detectAllFaces(cropCanvas, farOpts)
-            .withFaceLandmarks(useTinyLandmarks)
-            .withFaceDescriptors();
+          const pass2Detections = await detectWithDescriptors(cropCanvas, farOpts);
           if (liveFastMode) {
             recoveryRanThisScan = true;
             lastLiveRecoveryAt = performance.now();
@@ -719,9 +836,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           inputSize: liveFastMode ? 512 : 608,
           scoreThreshold: 0.10
         });
-        const recoveryDetections = await faceapi.detectAllFaces(inputElement, recoveryOpts)
-          .withFaceLandmarks(useTinyLandmarks)
-          .withFaceDescriptors();
+        const recoveryDetections = await detectWithDescriptors(inputElement, recoveryOpts);
         if (liveFastMode) {
           recoveryRanThisScan = true;
           lastLiveRecoveryAt = performance.now();
@@ -799,9 +914,7 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           inputSize: liveFastMode ? 512 : 608,
           scoreThreshold: 0.10
         });
-        const retryDetections = await faceapi.detectAllFaces(inputElement, retryOpts)
-          .withFaceLandmarks(useTinyLandmarks)
-          .withFaceDescriptors();
+        const retryDetections = await detectWithDescriptors(inputElement, retryOpts);
         if (liveFastMode) {
           recoveryRanThisScan = true;
           lastLiveRecoveryAt = performance.now();
@@ -838,7 +951,14 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
     // --- DRAW BOUNDING BOXES ON OVERLAY ---
     if (canvas) {
       const ctx = canvas.getContext('2d');
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (overlayView) {
+        ctx.setTransform(overlayView.s, 0, 0, overlayView.s, overlayView.tx, overlayView.ty);
+        ctx._u = 1 / overlayView.s;
+        ctx._tx = overlayView.tx;
+      }
+      const u = overlayUnit(ctx);
 
       // Show the detected face and both eye regions regardless of whether identity
       // matching succeeded. This reuses landmarks from the same inference pass.
@@ -858,12 +978,12 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
 
           // High-tech reticle corners
           ctx.strokeStyle = strokeColor;
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 3 * u;
           ctx.strokeRect(x, y, width, height);
 
           // Subtle corner accents
-          const cornerLen = Math.min(16, width * 0.25);
-          ctx.lineWidth = 5;
+          const cornerLen = Math.min(16 * u, width * 0.25);
+          ctx.lineWidth = 4.5 * u;
           ctx.beginPath();
           // Top-left
           ctx.moveTo(x, y + cornerLen); ctx.lineTo(x, y); ctx.lineTo(x + cornerLen, y);
@@ -878,18 +998,24 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
           // Label pill with Distance Tag
           const distTag = m.distance.category === 'far' ? `🔭 ${m.distance.meters}m` : `${m.distance.meters}m`;
           const labelText = `${m.student.name} (${m.conf}%) · ${distTag}`;
-          ctx.font = 'bold 12px "Space Grotesk", sans-serif';
+          ctx.font = `bold ${12.5 * u}px "Space Grotesk", sans-serif`;
           const textW = ctx.measureText(labelText).width;
-          const pillH = 22;
-          const pillY = Math.max(0, y - pillH - 4);
+          const pillH = 22 * u;
+          const pillW = textW + 14 * u;
+          // Keep the name pill fully on screen (phones crop the video sides).
+          const viewLeft = overlayView ? (0 - overlayView.tx) / overlayView.s : 0;
+          const viewRight = overlayView ? (overlayView.w - overlayView.tx) / overlayView.s : origW;
+          const pillX = Math.max(viewLeft, Math.min(x, viewRight - pillW));
+          const viewTop = overlayView ? (0 - overlayView.ty) / overlayView.s : 0;
+          const pillY = Math.max(viewTop, y - pillH - 4 * u);
 
           ctx.fillStyle = bgColor;
           ctx.beginPath();
-          ctx.roundRect(x, pillY, textW + 14, pillH, 6);
+          ctx.roundRect(pillX, pillY, pillW, pillH, 6 * u);
           ctx.fill();
 
           ctx.fillStyle = '#ffffff';
-          ctx.fillText(labelText, x + 7, pillY + 15);
+          ctx.fillText(labelText, pillX + 7 * u, pillY + 15 * u);
         });
 
         // Update confidence pill
@@ -915,6 +1041,11 @@ async function executeUltraFastScan(manualSnap = false, sourceInput = null) {
       } else {
         if (badge) badge.classList.add('hidden');
       }
+    }
+
+    if (canvas) {
+      const resetCtx = canvas.getContext('2d');
+      resetCtx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     // Save first detected face descriptor globally for quick demo enrollment
@@ -1073,7 +1204,7 @@ async function handleSnapAndVerify() {
     // the backup frames are only analyzed if the first frame does not produce a reliable match.
     const scanFrames = [snapCanvas];
     for (let frameIndex = 1; frameIndex < 3; frameIndex++) {
-      await new Promise(resolve => setTimeout(resolve, 85));
+      await new Promise(resolve => setTimeout(resolve, 40));
       if (!videoStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) break;
       const backupCanvas = document.createElement('canvas');
       backupCanvas.width = video.videoWidth || snapCanvas.width;
@@ -1105,6 +1236,13 @@ async function handleSnapAndVerify() {
       frameResults.push({ frameIndex, result: frameResult });
       scanResult = frameResult;
       if (frameResult.error && !frameResult.busy) break;
+      // Early exit: once the same student is confirmed in two frames, the third frame is not needed.
+      const seenCounts = new Map();
+      for (const item of frameResults) {
+        const ids = new Set((item.result.matches || []).map(m => String(m.regNo || m.student?.regNo || '')).filter(Boolean));
+        ids.forEach(id => seenCounts.set(id, (seenCounts.get(id) || 0) + 1));
+      }
+      if ([...seenCounts.values()].some(count => count >= 2)) break;
     }
 
     // Confirm a student only when the same registration number is independently matched
@@ -1141,7 +1279,7 @@ async function handleSnapAndVerify() {
     } else {
       const reasons = frameResults.map(item => item.result.reason).filter(Boolean);
       const onlyOneFrameMatched = votes.size > 0;
-      const reason = reasons.includes('ambiguous') ? 'ambiguous' : (onlyOneFrameMatched ? 'inconsistent' : (reasons.includes('lowQuality') ? 'lowQuality' : (reasons.includes('lowSimilarity') ? 'lowSimilarity' : 'unknown')));
+      const reason = reasons.includes('noProfiles') ? 'noProfiles' : reasons.includes('ambiguous') ? 'ambiguous' : (onlyOneFrameMatched ? 'inconsistent' : (reasons.includes('lowQuality') ? 'lowQuality' : (reasons.includes('lowSimilarity') ? 'lowSimilarity' : 'unknown')));
       scanResult = { ...(frameResults[frameResults.length - 1]?.result || scanResult), matches: [], reason };
     }
     scanResult.durationMs = Math.max(1, Math.round(performance.now() - processingStarted));
@@ -1193,7 +1331,7 @@ async function handleSnapAndVerify() {
           html += `
             <div class="flex items-center justify-between p-2.5 rounded-xl border ${isViolation ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'} text-xs">
               <div class="flex items-center gap-2.5 min-w-0">
-                <img src="${s.photoUrl || liveSnapshotUrl}" class="w-10 h-10 rounded-lg object-cover border border-slate-300 shadow-sm shrink-0">
+                <img ${studentPhotoAttrs(s, liveSnapshotUrl)} class="w-10 h-10 rounded-lg object-cover border border-slate-300 shadow-sm shrink-0">
                 <div class="min-w-0">
                   <div class="flex items-center gap-1.5">
                     <p class="font-bold text-slate-900 truncate">${s.name}</p>
@@ -1243,6 +1381,7 @@ async function handleSnapAndVerify() {
         const scanProblem = scanResult.error || (scanResult.busy ? 'Scanner is busy. Please try again.' : '');
         const failureTitle = scanProblem ? 'Scanner Could Not Complete the Match' : (scanResult.reason === 'ambiguous' ? 'Similar Faces — Manual Verification Needed' : 'No Reliable Match');
         const reasonMessages = {
+          noProfiles: 'No student has an enrolled face profile on this device yet. A student being listed in the roster is not enough: open Admin and enroll each student with 2–3 clear photos (or use the photo ZIP import), then wait for cloud sync to finish.',
           ambiguous: 'Two or more enrolled face profiles are too similar to distinguish reliably (this can happen with twins). Do not guess. Verify using the student ID/QR or an authorized staff member.',
           inconsistent: 'The identity did not match consistently across camera frames. Ask the student to face the camera, move into good light, uncover the face where practical, and retry. Use student ID/staff verification if it still fails.',
           lowQuality: 'The face image or saved face profile is not usable. Use a clear, single-person photo and re-enroll with up to 3 current photos.',
@@ -1266,7 +1405,7 @@ async function handleSnapAndVerify() {
           </div>
         `;
       }
-      showToast(scanResult.error || (scanResult.busy ? 'Scanner is busy. Please try again.' : 'No registered students recognized after retrying frames.'));
+      showToast(scanResult.error || (scanResult.busy ? 'Scanner is busy. Please try again.' : (scanResult.reason === 'noProfiles' ? 'No enrolled face profiles found. Enroll student faces from Admin first.' : 'Face seen but no enrolled student matched after retrying frames.')));
     }
   } catch (err) {
     console.error('Snap error:', err);

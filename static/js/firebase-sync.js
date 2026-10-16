@@ -37,8 +37,38 @@ function applyCloudStudentRoster(cloudStudents) {
     }
   }
 
-  saveStudents(safeCloudStudents);
-  return safeCloudStudents;
+  // Never let a cloud copy that has no face profile erase a face profile this device
+  // already holds (e.g. a failed upload, or another device saved the student without one).
+  const localByReg = new Map();
+  getStudents().forEach(s => { if (s && s.regNo) localByReg.set(String(s.regNo).trim(), s); });
+  const hasProfile = s => {
+    if (!s) return false;
+    const list = Array.isArray(s.faceDescriptors) && s.faceDescriptors.length ? s.faceDescriptors : [s.faceDescriptor];
+    return list.some(d => typeof isValidFaceDescriptor === 'function' ? isValidFaceDescriptor(d) : Boolean(d));
+  };
+  const restoredFromLocal = [];
+  const mergedStudents = safeCloudStudents.map(cloudStudent => {
+    const local = localByReg.get(String(cloudStudent.regNo).trim());
+    if (!hasProfile(cloudStudent) && hasProfile(local)) {
+      const restored = {
+        ...cloudStudent,
+        faceDescriptor: local.faceDescriptor || null,
+        faceDescriptors: Array.isArray(local.faceDescriptors) && local.faceDescriptors.length
+          ? local.faceDescriptors
+          : [local.faceDescriptor]
+      };
+      restoredFromLocal.push(restored);
+      return restored;
+    }
+    return cloudStudent;
+  });
+
+  saveStudents(mergedStudents);
+  // Push the recovered face profiles back so every device converges again.
+  if (restoredFromLocal.length && typeof saveStudentToCloud === 'function') {
+    restoredFromLocal.forEach(s => { saveStudentToCloud(s); });
+  }
+  return mergedStudents;
 }
 
 function updateCloudStatus(message) {
@@ -268,11 +298,20 @@ async function saveStudentToCloud(student) {
       cloudPhotoUrl = uploadedPhotoUrl || compressedPhoto;
     }
 
-    await cloudDb.collection('students').doc(String(student.regNo)).set({
+    const payload = {
       ...student,
       photoUrl: cloudPhotoUrl,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    };
+    // A save that carries no face data at all must not wipe the face profile already in the
+    // cloud. An explicit empty array ([]) still clears it on purpose (photo changed).
+    if ((payload.faceDescriptor === null || payload.faceDescriptor === undefined) &&
+        (payload.faceDescriptors === null || payload.faceDescriptors === undefined)) {
+      delete payload.faceDescriptor;
+      delete payload.faceDescriptors;
+    }
+    Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
+    await cloudDb.collection('students').doc(String(student.regNo)).set(payload, { merge: true });
     return true;
   } catch (e) {
     console.error('Failed to sync student to cloud:', e);

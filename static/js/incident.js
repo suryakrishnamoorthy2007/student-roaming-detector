@@ -107,8 +107,11 @@ function triggerVerification(regNo, livePhoto, confidence) {
   document.getElementById('modal-stu-hod').innerText = student.hodName || 'Not assigned';
   const hodPhoneEl = document.getElementById('modal-stu-hod-phone');
   if (hodPhoneEl) hodPhoneEl.innerText = student.hodPhone || 'Not assigned';
-  document.getElementById('modal-enrolled-photo').src = student.photoUrl;
-  document.getElementById('modal-live-photo').src = livePhoto;
+  // Always show the matched student's enrolled face; fall back to an initials avatar if the
+  // stored photo is missing/blocked, and to a fresh camera frame if no live photo was passed.
+  setStudentPhoto(document.getElementById('modal-enrolled-photo'), student.photoUrl, student.name);
+  const liveSrc = livePhoto || (typeof captureScannerFrame === 'function' ? captureScannerFrame(0.8) : '');
+  setStudentPhoto(document.getElementById('modal-live-photo'), liveSrc, 'Live');
 
   if (typeof preCacheEvidenceFiles === 'function') {
     preCacheEvidenceFiles(student, livePhoto);
@@ -432,12 +435,22 @@ async function sendAlertToBackend(studentList, logEntry, alertMessage, composite
       compositeFrame: compositeFrameDataUrl || ''
     };
 
-    await fetch('/api/send-alert', {
+    const alertResponse = await fetch('/api/send-alert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-  } catch (err) { }
+    if (!alertResponse.ok) {
+      throw new Error(`Alert server replied HTTP ${alertResponse.status}`);
+    }
+    const alertResult = await alertResponse.json().catch(() => ({}));
+    if (alertResult && alertResult.status === 'error') {
+      throw new Error(alertResult.detail || 'Alert server reported an error');
+    }
+  } catch (err) {
+    console.warn('[Alert] Backend alert failed:', err);
+    if (typeof showToast === 'function') showToast('Alert could not be sent to the server. Check connection and notify the HOD manually.');
+  }
 }
 
 async function sendUltraMsgDirect(phone, message, imageBase64, settings) {
@@ -453,12 +466,15 @@ async function sendUltraMsgDirect(phone, message, imageBase64, settings) {
     params.append('image', imageBase64);
     params.append('caption', message);
 
-    await fetch(url, {
+    const direct = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString()
     });
-  } catch (err) { }
+    if (!direct.ok) console.warn('[Alert] UltraMsg direct send replied HTTP', direct.status);
+  } catch (err) {
+    console.warn('[Alert] UltraMsg direct send failed:', err);
+  }
 }
 
 async function dispatchIncidentReport(studentList) {

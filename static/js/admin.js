@@ -316,7 +316,14 @@ async function processBulkExcel() {
         hodEmail: String(getUploadField(row, 'hodEmail', 'hodMail') || previousStudent?.hodEmail || '').trim(),
         hodPhone: String(getUploadField(row, 'hodPhone', 'hodMobile') || previousStudent?.hodPhone || '').trim(),
         photoUrl,
-        faceDescriptor: previousStudent?.photoUrl === photoUrl ? previousStudent?.faceDescriptor || null : null
+        ...(previousStudent && previousStudent.photoUrl === photoUrl
+          // Same photo: keep the existing face profile (both the single and multi-template fields).
+          ? {
+              faceDescriptor: previousStudent.faceDescriptor || null,
+              faceDescriptors: Array.isArray(previousStudent.faceDescriptors) ? previousStudent.faceDescriptors : (previousStudent.faceDescriptor ? [previousStudent.faceDescriptor] : [])
+            }
+          // Photo changed or new student: drop stale face data so the old face can never match.
+          : { faceDescriptor: null, faceDescriptors: [] })
       };
 
       if (previousIndex === undefined) {
@@ -479,7 +486,7 @@ function renderAdminStudentData() {
   count.innerText = `${students.length} Student${students.length === 1 ? '' : 's'}`;
   container.innerHTML = students.length ? students.map(student => `
     <div class="p-3 border-b border-slate-200 flex items-center gap-3">
-      <img src="${student.photoUrl}" class="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0">
+      <img ${studentPhotoAttrs(student)} class="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0">
       <div class="min-w-0 flex-1">
         <p class="font-bold text-slate-800 truncate">${student.name}</p>
         <p class="text-[10px] font-mono text-indigo-600">${student.regNo} • ${student.department} ${student.year}-${student.section}</p>

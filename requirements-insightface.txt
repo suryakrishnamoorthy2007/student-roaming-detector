@@ -1,0 +1,6 @@
+# OPTIONAL: only for the server-side /verify-face endpoint.
+# The web app itself does NOT need these (face recognition runs in the browser).
+# On Windows, insightface may need "Microsoft C++ Build Tools" to install.
+-r requirements.txt
+onnxruntime>=1.16
+insightface>=0.7.3

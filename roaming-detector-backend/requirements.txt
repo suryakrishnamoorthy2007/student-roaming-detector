@@ -1,7 +1,6 @@
-fastapi
-uvicorn
-opencv-python-headless
-numpy
-python-multipart
-onnxruntime
-insightface
+# Core packages needed to run the web app + alert endpoint
+fastapi>=0.110
+uvicorn>=0.27
+opencv-python-headless>=4.8
+numpy>=1.24
+python-multipart>=0.0.9

@@ -188,3 +188,42 @@ function saveUsers(list) {
 function getAppSettings() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS) || '{}'); } catch (e) { return {}; }
 }
+
+
+/* ---------- Student photo helpers: a student face/avatar is ALWAYS shown ---------- */
+function studentInitialsAvatar(name) {
+  const parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+  const initials = ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">` +
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e7490"/><stop offset="1" stop-color="#4f46e5"/></linearGradient></defs>` +
+    `<rect width="200" height="200" fill="url(#g)"/>` +
+    `<text x="100" y="118" font-family="Arial,sans-serif" font-size="78" font-weight="700" fill="#fff" text-anchor="middle">${initials.replace(/[<>&]/g, '')}</text></svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+function escapeHtmlAttr(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+/** onerror handler used by <img> tags: swap a broken/blocked photo for the initials avatar. */
+function photoFallback(img) {
+  if (!img) return;
+  img.onerror = null;
+  img.src = studentInitialsAvatar(img.getAttribute('data-name') || '');
+}
+
+/** Sets an <img> to the student's photo, falling back to initials when empty or failing to load. */
+function setStudentPhoto(imgEl, photoUrl, name) {
+  if (!imgEl) return;
+  imgEl.setAttribute('data-name', name || '');
+  imgEl.onerror = () => photoFallback(imgEl);
+  const hasPhoto = typeof photoUrl === 'string' && photoUrl.trim().length > 0;
+  imgEl.src = hasPhoto ? photoUrl : studentInitialsAvatar(name);
+}
+
+/** Returns attribute text for <img> inside template strings. */
+function studentPhotoAttrs(student, fallbackSrc) {
+  const name = student && student.name ? student.name : '';
+  const src = (student && typeof student.photoUrl === 'string' && student.photoUrl.trim()) ? student.photoUrl : (fallbackSrc || studentInitialsAvatar(name));
+  return `src="${escapeHtmlAttr(src)}" data-name="${escapeHtmlAttr(name)}" onerror="photoFallback(this)"`;
+}

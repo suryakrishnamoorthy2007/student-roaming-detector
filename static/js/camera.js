@@ -35,6 +35,10 @@ async function requestCameraStart() {
     { video: true, audio: false }
   ];
 
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')) {
+    const hd = constraintsList.shift();       // 1080p request
+    constraintsList.splice(1, 0, hd);         // try 720p first, 1080p second
+  }
   for (const constraints of constraintsList) {
     try {
       videoStream = await navigator.mediaDevices.getUserMedia(constraints);
